@@ -10,6 +10,207 @@ const VERTICALS = ['Technology', 'Financial Services', 'Healthcare', 'Manufactur
 const YEARS = ['2022', '2023', '2024', '2025'];
 const verticalColors = { 'Technology': '#3b82f6', 'Financial Services': '#22c55e', 'Healthcare': '#ef4444', 'Manufacturing': '#f59e0b', 'Retail': '#8b5cf6', 'Media': '#ec4899' };
 
+// Pipeline stages that count as active pipeline (Stage 2+)
+const PIPELINE_STAGES = ['Stage 2', 'Stage 3', 'Stage 4', 'Stage 5', 'Negotiation', 'Proposal', 'Qualification', 'Discovery', 'Evaluation'];
+
+// Parse CSV from Salesforce export
+const parseCSV = (csvText) => {
+  const lines = csvText.split('\n').filter(line => line.trim());
+  if (lines.length < 2) return [];
+  
+  // Parse header - handle both comma and tab separated
+  const delimiter = lines[0].includes('\t') ? '\t' : ',';
+  const headers = lines[0].split(delimiter).map(h => h.trim().replace(/"/g, ''));
+  
+  // Find column indices
+  const colIndex = {
+    account: headers.findIndex(h => h.toLowerCase().includes('account name')),
+    rep: headers.findIndex(h => h.toLowerCase().includes('opportunity owner') && !h.toLowerCase().includes('manager')),
+    name: headers.findIndex(h => h.toLowerCase().includes('opportunity name')),
+    stage: headers.findIndex(h => h.toLowerCase() === 'stage'),
+    fiscalPeriod: headers.findIndex(h => h.toLowerCase().includes('fiscal period')),
+    age: headers.findIndex(h => h.toLowerCase() === 'age'),
+    closeDate: headers.findIndex(h => h.toLowerCase().includes('close date')),
+    createdDate: headers.findIndex(h => h.toLowerCase().includes('created date')),
+    source: headers.findIndex(h => h.toLowerCase().includes('lead source')),
+    type: headers.findIndex(h => h.toLowerCase() === 'type'),
+    currency: headers.findIndex(h => h.toLowerCase().includes('opportunity currency')),
+    vertical: headers.findIndex(h => h.toLowerCase() === 'vertical'),
+    amount: headers.findIndex(h => h.toLowerCase().includes('amount')),
+    customerRel: headers.findIndex(h => h.toLowerCase().includes('customer relationship')),
+    parentAccount: headers.findIndex(h => h.toLowerCase().includes('parent account')),
+    manager: headers.findIndex(h => h.toLowerCase().includes('manager')),
+    closedWhy: headers.findIndex(h => h.toLowerCase().includes('closed why') && !h.toLowerCase().includes('sub')),
+    closedWhySub: headers.findIndex(h => h.toLowerCase().includes('closed why sub')),
+  };
+  
+  const opps = [];
+  
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCSVLine(lines[i], delimiter);
+    if (values.length < 5) continue;
+    
+    const getValue = (idx) => idx >= 0 && idx < values.length ? values[idx]?.trim().replace(/"/g, '') : '';
+    
+    const stageName = getValue(colIndex.stage);
+    const currency = getValue(colIndex.currency);
+    const amountStr = getValue(colIndex.amount);
+    const ageStr = getValue(colIndex.age);
+    const closeDateStr = getValue(colIndex.closeDate);
+    const fiscalPeriod = getValue(colIndex.fiscalPeriod);
+    const closedWhy = getValue(colIndex.closedWhy);
+    const closedWhySub = getValue(colIndex.closedWhySub);
+    
+    // Determine stage category
+    let stageCategory = 'Pipeline';
+    const stageLower = stageName.toLowerCase();
+    if (stageLower.includes('closed won') || stageLower.includes('won')) {
+      stageCategory = 'Closed Won';
+    } else if (stageLower.includes('closed lost') || stageLower.includes('lost')) {
+      stageCategory = 'Closed Lost';
+    } else {
+      // Check if it's stage 2+ for pipeline
+      const stageMatch = stageName.match(/stage\s*(\d+)/i);
+      if (stageMatch) {
+        const stageNum = parseInt(stageMatch[1]);
+        if (stageNum < 2) continue; // Skip Stage 0 and Stage 1
+      }
+    }
+    
+    // Parse territory from currency
+    const territory = currency.toUpperCase().includes('CAD') ? 'Canada' : 'US';
+    
+    // Parse amount
+    let amount = 0;
+    if (amountStr) {
+      amount = parseFloat(amountStr.replace(/[$,]/g, '')) || 0;
+    }
+    
+    // Parse age/days in pipeline
+    const daysInPipeline = parseInt(ageStr) || 0;
+    
+    // Parse loss reason from Closed Why + Closed Why Suboption
+    let lossReason = null;
+    if (stageCategory === 'Closed Lost') {
+      if (closedWhy || closedWhySub) {
+        lossReason = closedWhySub ? `${closedWhy}: ${closedWhySub}` : closedWhy;
+        // Also keep a simplified version for grouping
+        if (!lossReason) lossReason = 'Unknown';
+      } else {
+        lossReason = 'Unknown';
+      }
+    }
+    
+    // Parse close date
+    let closeDate = closeDateStr || '';
+    let year = new Date().getFullYear().toString();
+    let quarter = 'Q1';
+    let month = 1;
+    
+    if (closeDate) {
+      const dateObj = new Date(closeDate);
+      if (!isNaN(dateObj.getTime())) {
+        year = dateObj.getFullYear().toString();
+        month = dateObj.getMonth() + 1;
+        quarter = `Q${Math.ceil(month / 3)}`;
+      }
+    } else if (fiscalPeriod) {
+      // Try to parse fiscal period like "FY2024 Q3" or "2024-Q3"
+      const yearMatch = fiscalPeriod.match(/20\d{2}/);
+      const qMatch = fiscalPeriod.match(/Q(\d)/i);
+      if (yearMatch) year = yearMatch[0];
+      if (qMatch) {
+        quarter = `Q${qMatch[1]}`;
+        month = (parseInt(qMatch[1]) - 1) * 3 + 2;
+      }
+    }
+    
+    // Get vertical or assign based on patterns
+    let vertical = getValue(colIndex.vertical) || 'Technology';
+    if (!VERTICALS.includes(vertical)) {
+      // Try to map common variations
+      const vLower = vertical.toLowerCase();
+      if (vLower.includes('tech') || vLower.includes('software')) vertical = 'Technology';
+      else if (vLower.includes('financ') || vLower.includes('bank') || vLower.includes('insurance')) vertical = 'Financial Services';
+      else if (vLower.includes('health') || vLower.includes('medical') || vLower.includes('pharma')) vertical = 'Healthcare';
+      else if (vLower.includes('manufact') || vLower.includes('industrial')) vertical = 'Manufacturing';
+      else if (vLower.includes('retail') || vLower.includes('consumer')) vertical = 'Retail';
+      else if (vLower.includes('media') || vLower.includes('entertainment')) vertical = 'Media';
+      else vertical = 'Technology'; // Default
+    }
+    
+    // Get source or default
+    let source = getValue(colIndex.source) || 'Inbound';
+    if (!LEAD_SOURCES.includes(source)) {
+      const sLower = source.toLowerCase();
+      if (sLower.includes('outbound') || sLower.includes('cold') || sLower.includes('prospect')) source = 'Outbound';
+      else if (sLower.includes('partner') || sLower.includes('channel') || sLower.includes('reseller')) source = 'Partner';
+      else if (sLower.includes('referral') || sLower.includes('customer ref')) source = 'Referral';
+      else source = 'Inbound';
+    }
+    
+    // Get type or default
+    let type = getValue(colIndex.type) || 'New Business';
+    if (!OPPORTUNITY_TYPES.includes(type)) {
+      const tLower = type.toLowerCase();
+      if (tLower.includes('expan') || tLower.includes('growth')) type = 'Expansion';
+      else if (tLower.includes('upsell') || tLower.includes('cross')) type = 'Upsell';
+      else if (tLower.includes('renew')) type = 'Renewal';
+      else type = 'New Business';
+    }
+    
+    opps.push({
+      id: `OPP-${i}`,
+      name: getValue(colIndex.name) || `${getValue(colIndex.account)} - ${type}`,
+      account: getValue(colIndex.account) || 'Unknown',
+      rep: getValue(colIndex.rep) || 'Unknown',
+      repTerritory: territory,
+      territory,
+      source,
+      type,
+      stage: stageCategory,
+      amount,
+      closeDate,
+      year,
+      quarter,
+      month,
+      lossReason,
+      lossReasonMain: closedWhy || null,
+      lossReasonSub: closedWhySub || null,
+      vertical,
+      daysInPipeline,
+      lastActivityDays: Math.min(daysInPipeline, 30),
+      isKeyAccount: amount > 100000,
+      customerRelationship: getValue(colIndex.customerRel) || 'Unknown',
+      parentAccount: getValue(colIndex.parentAccount),
+      manager: getValue(colIndex.manager),
+    });
+  }
+  
+  return opps;
+};
+
+// Helper to parse CSV line handling quoted values
+const parseCSVLine = (line, delimiter = ',') => {
+  const values = [];
+  let current = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === delimiter && !inQuotes) {
+      values.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  values.push(current);
+  return values;
+};
+
 const generateData = () => {
   const opps = [];
   const reps = [
@@ -183,20 +384,25 @@ const MetricCard = ({ label, value, prevValue, format = 'currency', goal, onClic
 const RiskItem = ({ icon: Icon, color, title, subtitle, value, onClick }) => (<div onClick={onClick} className="flex items-center justify-between p-3 rounded-xl bg-neutral-800 border border-neutral-700 hover:bg-neutral-700 cursor-pointer transition-all"><div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center ${color === 'red' ? 'bg-red-500/10' : 'bg-yellow-500/10'}`}><Icon size={16} className={color === 'red' ? 'text-red-500' : 'text-yellow-500'} /></div><div><p className="text-sm font-medium text-white">{title}</p><p className="text-xs text-neutral-500">{subtitle}</p></div></div><span className={`text-sm font-semibold ${color === 'red' ? 'text-red-400' : 'text-yellow-400'}`}>{value}</span></div>);
 
 export default function RevIntelDashboard() {
-  const [data] = useState(generateData);
-  const rawData = data.opps;
-  const initialReps = data.reps;
+  const [demoData] = useState(generateData);
+  const [uploadedData, setUploadedData] = useState(null);
+  const [dataSource, setDataSource] = useState('demo'); // 'demo' or 'uploaded'
+  
+  const rawData = uploadedData || demoData.opps;
+  const initialReps = demoData.reps;
   
   const [territories, setTerritories] = useState([]);
   const [sources, setSources] = useState([]);
   const [types, setTypes] = useState([]);
   const [verticals, setVerticals] = useState([]);
+  const [customerRelationships, setCustomerRelationships] = useState([]);
   const [activeYears, setActiveYears] = useState(['2024', '2025']);
   const [timePeriods, setTimePeriods] = useState(['All']);
   const [modal, setModal] = useState({ open: false, title: '', subtitle: '', data: [] });
   const [showRisks, setShowRisks] = useState(true);
   const [showAccounts, setShowAccounts] = useState(true);
   const [showVerticals, setShowVerticals] = useState(true);
+  const [showRetention, setShowRetention] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
   const [annotations, setAnnotations] = useState([]);
   const [showAnnotations, setShowAnnotations] = useState(false);
@@ -208,6 +414,8 @@ export default function RevIntelDashboard() {
   const [goalWinRate, setGoalWinRate] = useState(0.50);
   const [goalCycle, setGoalCycle] = useState(45);
   const [goalDealSize, setGoalDealSize] = useState(85000);
+  const [goalNDR, setGoalNDR] = useState(1.10);
+  const [goalGDR, setGoalGDR] = useState(0.90);
   
   const [repQuotas, setRepQuotas] = useState(() => { const q = {}; initialReps.forEach(r => { q[r.name] = r.quota; }); return q; });
   const updateRepQuota = (name, val) => setRepQuotas(prev => ({ ...prev, [name]: val }));
@@ -219,12 +427,13 @@ export default function RevIntelDashboard() {
   const uniqueSources = useMemo(() => [...new Set(rawData.map(o => o.source))].filter(Boolean).sort(), [rawData]);
   const uniqueTypes = useMemo(() => [...new Set(rawData.map(o => o.type))].filter(Boolean).sort(), [rawData]);
   const uniqueVerticals = useMemo(() => [...new Set(rawData.map(o => o.vertical))].filter(Boolean).sort(), [rawData]);
+  const uniqueCustomerRelationships = useMemo(() => [...new Set(rawData.map(o => o.customerRelationship))].filter(Boolean).sort(), [rawData]);
   const uniqueYears = useMemo(() => [...new Set(rawData.map(o => o.year))].filter(Boolean).sort(), [rawData]);
 
   const filtered = useMemo(() => {
     const fTime = o => { if (timePeriods.includes('All')) return true; const now = new Date(); const cm = now.getMonth() + 1, cq = Math.ceil(cm / 3), cy = now.getFullYear().toString(); for (const p of timePeriods) { if (p === 'MTD' && o.year === cy && o.month === cm) return true; if (p === 'QTD' && o.year === cy && o.month >= (cq - 1) * 3 + 1 && o.month <= cm) return true; if (p === 'YTD' && o.year === cy && o.month <= cm) return true; if (['Q1','Q2','Q3','Q4'].includes(p) && o.quarter === p) return true; } return false; };
-    return rawData.filter(o => { if (territories.length && !territories.includes(o.territory)) return false; if (sources.length && !sources.includes(o.source)) return false; if (types.length && !types.includes(o.type)) return false; if (verticals.length && !verticals.includes(o.vertical)) return false; if (!activeYears.includes(o.year)) return false; return fTime(o); });
-  }, [rawData, territories, sources, types, verticals, activeYears, timePeriods]);
+    return rawData.filter(o => { if (territories.length && !territories.includes(o.territory)) return false; if (sources.length && !sources.includes(o.source)) return false; if (types.length && !types.includes(o.type)) return false; if (verticals.length && !verticals.includes(o.vertical)) return false; if (customerRelationships.length && !customerRelationships.includes(o.customerRelationship)) return false; if (!activeYears.includes(o.year)) return false; return fTime(o); });
+  }, [rawData, territories, sources, types, verticals, customerRelationships, activeYears, timePeriods]);
 
   const prevYearData = useMemo(() => { const py = activeYears.map(y => String(parseInt(y) - 1)); return rawData.filter(o => py.includes(o.year)); }, [rawData, activeYears]);
 
@@ -244,9 +453,65 @@ export default function RevIntelDashboard() {
   const prevAvgCycle = prevWon.length > 0 ? prevWon.reduce((s, o) => s + o.daysInPipeline, 0) / prevWon.length : 0;
   const pipelineValue = pipeline.reduce((s, o) => s + o.amount, 0);
   const prevPipelineValue = prevYearData.filter(o => o.stage === 'Pipeline').reduce((s, o) => s + o.amount, 0);
-  const weightedPipeline = pipeline.reduce((s, o) => s + o.amount * (o.probability || 0.3), 0);
-  const forecastTotal = totalRevenue + weightedPipeline;
+  const forecastTotal = totalRevenue + pipelineValue;
   const forecastAttainment = goalRevenue > 0 ? forecastTotal / goalRevenue : 0;
+
+  // Retention metrics - by amount (NDR/GDR) and by logo count
+  const retentionMetrics = useMemo(() => {
+    // Get existing customers (Expansion, Upsell, Renewal types indicate existing customers)
+    const existingCustomerTypes = ['Expansion', 'Upsell', 'Renewal'];
+    
+    // Current period - existing customer revenue
+    const currentExistingWon = won.filter(o => existingCustomerTypes.includes(o.type));
+    const currentExistingLost = lost.filter(o => existingCustomerTypes.includes(o.type));
+    const currentExistingRevenue = currentExistingWon.reduce((s, o) => s + o.amount, 0);
+    const currentChurnRevenue = currentExistingLost.reduce((s, o) => s + o.amount, 0);
+    
+    // Previous period - existing customer revenue (this becomes the base)
+    const prevExistingWon = prevWon.filter(o => existingCustomerTypes.includes(o.type));
+    const prevExistingRevenue = prevExistingWon.reduce((s, o) => s + o.amount, 0);
+    
+    // Get unique accounts for logo-based retention
+    const currentAccounts = new Set(currentExistingWon.map(o => o.account));
+    const lostAccounts = new Set(currentExistingLost.map(o => o.account));
+    const prevAccounts = new Set(prevExistingWon.map(o => o.account));
+    
+    // Calculate NDR: (Starting Revenue + Expansion - Churn) / Starting Revenue
+    // Using previous period as starting revenue base
+    const baseRevenue = prevExistingRevenue || currentExistingRevenue * 0.9; // Fallback if no prev data
+    const expansionRevenue = currentExistingWon.filter(o => o.type === 'Expansion' || o.type === 'Upsell').reduce((s, o) => s + o.amount, 0);
+    const renewalRevenue = currentExistingWon.filter(o => o.type === 'Renewal').reduce((s, o) => s + o.amount, 0);
+    
+    // NDR = (Renewals + Expansions) / Base Revenue
+    const ndrAmount = baseRevenue > 0 ? (renewalRevenue + expansionRevenue) / baseRevenue : 1;
+    
+    // GDR = Renewals / Base Revenue (excludes expansion, only measures churn)
+    const gdrAmount = baseRevenue > 0 ? renewalRevenue / baseRevenue : 1;
+    
+    // Logo-based retention
+    const baseLogoCount = prevAccounts.size || currentAccounts.size;
+    const retainedLogos = [...currentAccounts].filter(a => prevAccounts.has(a) || prevAccounts.size === 0).length;
+    const churnedLogos = lostAccounts.size;
+    const newLogos = won.filter(o => o.type === 'New Business').length;
+    
+    const ndrLogo = baseLogoCount > 0 ? (retainedLogos + newLogos) / baseLogoCount : 1;
+    const gdrLogo = baseLogoCount > 0 ? retainedLogos / baseLogoCount : 1;
+    
+    return {
+      ndrAmount: Math.min(ndrAmount, 2), // Cap at 200%
+      gdrAmount: Math.min(gdrAmount, 1.5),
+      ndrLogo,
+      gdrLogo,
+      expansionRevenue,
+      renewalRevenue,
+      churnRevenue: currentChurnRevenue,
+      baseRevenue,
+      retainedLogos,
+      churnedLogos,
+      newLogos,
+      totalLogos: currentAccounts.size
+    };
+  }, [won, lost, prevWon]);
 
   const verticalAnalysis = useMemo(() => {
     const byV = {};
@@ -368,9 +633,43 @@ export default function RevIntelDashboard() {
   }, [verticalAnalysis, lossReasons, repsAtRisk, winRate, lost, filtered]);
 
   const forecastColor = forecastAttainment >= 1 ? colors.success : forecastAttainment >= 0.85 ? colors.warning : colors.danger;
-  const hasFilters = territories.length > 0 || sources.length > 0 || types.length > 0 || verticals.length > 0;
+  const hasFilters = territories.length > 0 || sources.length > 0 || types.length > 0 || verticals.length > 0 || customerRelationships.length > 0;
 
   const handleExport = () => { const d = { summary: { totalRevenue, winRate, avgDealSize, avgCycle, pipelineValue }, territories: territoryData, verticals: verticalAnalysis }; const b = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' }); const u = URL.createObjectURL(b); const a = document.createElement('a'); a.href = u; a.download = `revenue-intel-${new Date().toISOString().split('T')[0]}.json`; a.click(); };
+
+  const handleFileUpload = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const text = e.target?.result;
+      if (typeof text === 'string') {
+        const parsed = parseCSV(text);
+        if (parsed.length > 0) {
+          setUploadedData(parsed);
+          setDataSource('uploaded');
+          // Reset filters when new data is loaded
+          setTerritories([]);
+          setSources([]);
+          setTypes([]);
+          setVerticals([]);
+          // Set years based on data
+          const years = [...new Set(parsed.map(o => o.year))].sort();
+          setActiveYears(years.slice(-2));
+        } else {
+          alert('Could not parse CSV. Please check the format.');
+        }
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const clearUploadedData = () => {
+    setUploadedData(null);
+    setDataSource('demo');
+    fileInputRef.current.value = '';
+  };
 
   if (isLoading) return (<div className="min-h-screen bg-black text-white p-6"><div className="max-w-[1400px] mx-auto space-y-6"><Skeleton className="h-12 w-full" /><div className="flex gap-6"><Skeleton className="h-40 w-64" /><Skeleton className="h-40 flex-1" /></div><div className="grid grid-cols-2 gap-6"><Skeleton className="h-64" /><Skeleton className="h-64" /></div></div></div>);
 
@@ -384,7 +683,8 @@ export default function RevIntelDashboard() {
               <FilterDropdown label="Source" values={sources} options={uniqueSources.length > 0 ? uniqueSources : LEAD_SOURCES} onChange={setSources} icon={Zap} />
               <FilterDropdown label="Type" values={types} options={uniqueTypes.length > 0 ? uniqueTypes : OPPORTUNITY_TYPES} onChange={setTypes} icon={Layers} />
               <FilterDropdown label="Vertical" values={verticals} options={uniqueVerticals.length > 0 ? uniqueVerticals : VERTICALS} onChange={setVerticals} icon={Briefcase} />
-              {hasFilters && <button onClick={() => { setTerritories([]); setSources([]); setTypes([]); setVerticals([]); }} className="text-xs text-neutral-500 hover:text-white px-2 py-1 rounded-lg hover:bg-neutral-800 transition-all">Clear</button>}
+              <FilterDropdown label="Customer" values={customerRelationships} options={uniqueCustomerRelationships.length > 0 ? uniqueCustomerRelationships : ['Brand Direct', 'Agency']} onChange={setCustomerRelationships} icon={Users} />
+              {hasFilters && <button onClick={() => { setTerritories([]); setSources([]); setTypes([]); setVerticals([]); setCustomerRelationships([]); }} className="text-xs text-neutral-500 hover:text-white px-2 py-1 rounded-lg hover:bg-neutral-800 transition-all">Clear</button>}
             </div>
             <div className="flex items-center gap-2">
               <TimePeriodFilter selected={timePeriods} onChange={setTimePeriods} />
@@ -393,8 +693,13 @@ export default function RevIntelDashboard() {
               <div className="h-4 w-px bg-neutral-800" />
               <button onClick={() => setShowAnnotations(true)} className="p-1.5 rounded-xl text-neutral-500 hover:text-white hover:bg-neutral-700 transition-all" title="Notes"><StickyNote size={16} /></button>
               <button onClick={handleExport} className="p-1.5 rounded-xl text-neutral-500 hover:text-white hover:bg-neutral-700 transition-all" title="Export"><Download size={16} /></button>
-              <input type="file" ref={fileInputRef} accept=".csv" className="hidden" />
-              <button onClick={() => fileInputRef.current?.click()} className="p-1.5 rounded-xl text-neutral-500 hover:text-white hover:bg-neutral-700 transition-all" title="Upload"><Upload size={16} /></button>
+              <input type="file" ref={fileInputRef} accept=".csv" className="hidden" onChange={handleFileUpload} />
+              <button onClick={() => fileInputRef.current?.click()} className={`p-1.5 rounded-xl transition-all ${dataSource === 'uploaded' ? 'text-green-500 bg-green-500/10 hover:bg-green-500/20' : 'text-neutral-500 hover:text-white hover:bg-neutral-700'}`} title={dataSource === 'uploaded' ? 'CSV Loaded - Click to upload new' : 'Upload CSV'}><Upload size={16} /></button>
+              {dataSource === 'uploaded' && (
+                <button onClick={clearUploadedData} className="px-2 py-1 rounded-xl text-[10px] text-yellow-500 bg-yellow-500/10 hover:bg-yellow-500/20 transition-all">
+                  Using your data • Clear
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -406,7 +711,7 @@ export default function RevIntelDashboard() {
             <div className="flex-shrink-0 w-56">
               <div className="flex items-center gap-2 mb-2"><p className="text-xs text-neutral-500 uppercase tracking-wider">Forecast vs Goal</p><EditableValue value={goalRevenue} onChange={setGoalRevenue} format="currency" size="xs" /></div>
               <span className="text-5xl font-bold tracking-tight" style={{ color: forecastColor }}>{pct(forecastAttainment)}</span>
-              <div className="mt-3 space-y-1"><div className="flex items-center justify-between text-xs"><div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-white" /><span className="text-neutral-400">Closed</span></div><span className="text-white font-medium">{fmt(totalRevenue)}</span></div><div className="flex items-center justify-between text-xs"><div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-neutral-600" /><span className="text-neutral-400">Forecast</span></div><span className="text-neutral-300">{fmt(weightedPipeline)}</span></div></div>
+              <div className="mt-3 space-y-1"><div className="flex items-center justify-between text-xs"><div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-white" /><span className="text-neutral-400">Closed</span></div><span className="text-white font-medium">{fmt(totalRevenue)}</span></div><div className="flex items-center justify-between text-xs"><div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-neutral-600" /><span className="text-neutral-400">Forecast</span></div><span className="text-neutral-300">{fmt(pipelineValue)}</span></div></div>
             </div>
             <div className="flex-1 bg-neutral-800 border border-neutral-700 rounded-xl p-5">
               <div className="flex gap-6 mb-4">
@@ -450,6 +755,84 @@ export default function RevIntelDashboard() {
         </section>
 
         <section className="mb-8">
+          <button onClick={() => setShowRetention(!showRetention)} className="w-full flex items-center justify-between p-4 bg-neutral-800 border border-neutral-700 rounded-xl hover:bg-neutral-700 transition-all">
+            <div className="flex items-center gap-3"><TrendingUp size={16} className="text-neutral-400" /><span className="text-sm font-semibold">Retention Metrics</span><span className="text-xs text-neutral-500">NDR {pct(retentionMetrics.ndrAmount)}</span></div>
+            {showRetention ? <ChevronUp size={16} className="text-neutral-500" /> : <ChevronDown size={16} className="text-neutral-500" />}
+          </button>
+          {showRetention && (
+            <div className="mt-3 bg-neutral-800 border border-neutral-700 rounded-xl p-5">
+              <div className="grid grid-cols-2 gap-6">
+                <div>
+                  <h3 className="text-xs text-neutral-500 uppercase mb-4">By Revenue</h3>
+                  <div className="space-y-4">
+                    <div className="p-4 bg-neutral-700/30 rounded-xl">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-neutral-400">Net Dollar Retention</span>
+                        <span className={`text-lg font-semibold ${retentionMetrics.ndrAmount >= goalNDR ? 'text-green-400' : retentionMetrics.ndrAmount >= 1 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(retentionMetrics.ndrAmount)}</span>
+                      </div>
+                      <div className="h-2 bg-neutral-700 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${retentionMetrics.ndrAmount >= goalNDR ? 'bg-green-500' : retentionMetrics.ndrAmount >= 1 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(retentionMetrics.ndrAmount * 100, 150)}%` }} />
+                      </div>
+                      <div className="flex justify-between mt-1 text-[10px] text-neutral-500">
+                        <span>Goal: {pct(goalNDR)}</span>
+                        <span>Expansion: {fmt(retentionMetrics.expansionRevenue)}</span>
+                      </div>
+                    </div>
+                    <div className="p-4 bg-neutral-700/30 rounded-xl">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-neutral-400">Gross Dollar Retention</span>
+                        <span className={`text-lg font-semibold ${retentionMetrics.gdrAmount >= goalGDR ? 'text-green-400' : retentionMetrics.gdrAmount >= 0.85 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(retentionMetrics.gdrAmount)}</span>
+                      </div>
+                      <div className="h-2 bg-neutral-700 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${retentionMetrics.gdrAmount >= goalGDR ? 'bg-green-500' : retentionMetrics.gdrAmount >= 0.85 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(retentionMetrics.gdrAmount * 100, 100)}%` }} />
+                      </div>
+                      <div className="flex justify-between mt-1 text-[10px] text-neutral-500">
+                        <span>Goal: {pct(goalGDR)}</span>
+                        <span>Churn: {fmt(retentionMetrics.churnRevenue)}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <h3 className="text-xs text-neutral-500 uppercase mb-4">By Logo Count</h3>
+                  <div className="space-y-4">
+                    <div className="p-4 bg-neutral-700/30 rounded-xl">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-neutral-400">Net Logo Retention</span>
+                        <span className={`text-lg font-semibold ${retentionMetrics.ndrLogo >= 1 ? 'text-green-400' : retentionMetrics.ndrLogo >= 0.9 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(retentionMetrics.ndrLogo)}</span>
+                      </div>
+                      <div className="h-2 bg-neutral-700 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${retentionMetrics.ndrLogo >= 1 ? 'bg-green-500' : retentionMetrics.ndrLogo >= 0.9 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(retentionMetrics.ndrLogo * 100, 150)}%` }} />
+                      </div>
+                      <div className="flex justify-between mt-1 text-[10px] text-neutral-500">
+                        <span>New: {retentionMetrics.newLogos} logos</span>
+                        <span>Total: {retentionMetrics.totalLogos} logos</span>
+                      </div>
+                    </div>
+                    <div className="p-4 bg-neutral-700/30 rounded-xl">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm text-neutral-400">Gross Logo Retention</span>
+                        <span className={`text-lg font-semibold ${retentionMetrics.gdrLogo >= 0.9 ? 'text-green-400' : retentionMetrics.gdrLogo >= 0.8 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(retentionMetrics.gdrLogo)}</span>
+                      </div>
+                      <div className="h-2 bg-neutral-700 rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${retentionMetrics.gdrLogo >= 0.9 ? 'bg-green-500' : retentionMetrics.gdrLogo >= 0.8 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(retentionMetrics.gdrLogo * 100, 100)}%` }} />
+                      </div>
+                      <div className="flex justify-between mt-1 text-[10px] text-neutral-500">
+                        <span>Retained: {retentionMetrics.retainedLogos}</span>
+                        <span>Churned: {retentionMetrics.churnedLogos}</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 pt-4 border-t border-neutral-700 flex items-center gap-4 text-[10px] text-neutral-500">
+                <Settings size={10} />
+                <span>Goals:</span>
+                <span>NDR <EditableValue value={goalNDR} onChange={setGoalNDR} format="percent" size="xs" /></span>
+                <span>GDR <EditableValue value={goalGDR} onChange={setGoalGDR} format="percent" size="xs" /></span>
+              </div>
+            </div>
+          )}
           <button onClick={() => setShowAccounts(!showAccounts)} className="w-full flex items-center justify-between p-4 bg-neutral-800 border border-neutral-700 rounded-xl hover:bg-neutral-700 transition-all"><div className="flex items-center gap-3"><Building size={16} className="text-neutral-400" /><span className="text-sm font-semibold">Top 20 Accounts</span><span className="text-xs text-neutral-500">{pct(top20Analysis.top20PctOfBusiness)} of revenue</span></div>{showAccounts ? <ChevronUp size={16} className="text-neutral-500" /> : <ChevronDown size={16} className="text-neutral-500" />}</button>
           {showAccounts && (<div className="mt-3 bg-neutral-800 border border-neutral-700 rounded-xl p-5"><div className="mb-4 p-3 bg-neutral-700/50 rounded-xl"><p className="text-sm text-neutral-300">{top20Analysis.insight}</p></div><div className="mb-6"><h3 className="text-xs text-neutral-500 uppercase mb-3">% of Business Over Time</h3><div className="h-28"><ResponsiveContainer><AreaChart data={top20Analysis.trendData}><CartesianGrid strokeDasharray="3 3" stroke="#404040" /><XAxis dataKey="year" stroke="#525252" tick={{ fontSize: 10 }} /><YAxis tickFormatter={v => pct(v)} stroke="#525252" tick={{ fontSize: 10 }} domain={[0, 'auto']} /><Tooltip content={({ active, payload, label }) => active && payload?.length ? <div className="bg-neutral-800 border border-neutral-700 rounded-xl p-3 shadow-xl"><p className="text-xs text-neutral-300 mb-1">{label}</p><p className="text-sm text-white">{pct(payload[0].value)} of revenue</p></div> : null} /><Area type="monotone" dataKey="pctOfBusiness" stroke="#22c55e" fill="#22c55e" fillOpacity={0.1} strokeWidth={2} /></AreaChart></ResponsiveContainer></div></div><div className="overflow-auto max-h-64"><table className="w-full"><thead className="sticky top-0 bg-neutral-800"><tr className="text-[10px] text-neutral-500 uppercase"><th className="text-left py-2 px-2">Account</th><th className="text-left py-2 px-2">Vertical</th><th className="text-right py-2 px-2">Revenue</th><th className="text-right py-2 px-2">YoY</th><th className="text-right py-2 px-2">Pipeline</th></tr></thead><tbody className="divide-y divide-neutral-700">{top20Analysis.accounts.slice(0, 10).map((acc, i) => (<tr key={acc.name} className="hover:bg-neutral-700 cursor-pointer transition-all" onClick={() => setModal({ open: true, title: acc.name, subtitle: acc.vertical, data: filtered.filter(o => o.account === acc.name) })}><td className="py-2 px-2"><div className="flex items-center gap-2"><span className="w-5 h-5 rounded-lg bg-neutral-700 text-[10px] font-bold flex items-center justify-center text-neutral-400">{i + 1}</span><span className="text-sm text-white">{acc.name}</span></div></td><td className="py-2 px-2"><span className="text-xs px-2 py-0.5 rounded-lg" style={{ backgroundColor: `${verticalColors[acc.vertical] || '#737373'}20`, color: verticalColors[acc.vertical] || '#737373' }}>{acc.vertical}</span></td><td className="py-2 px-2 text-sm text-right font-medium">{fmt(acc.revenue)}</td><td className="py-2 px-2 text-sm text-right">{acc.change !== null ? <span className={acc.change >= 0 ? 'text-green-500' : 'text-red-500'}>{acc.change >= 0 ? '+' : ''}{(acc.change * 100).toFixed(0)}%</span> : <span className="text-neutral-600">—</span>}</td><td className="py-2 px-2 text-sm text-right text-neutral-400">{acc.pipeline > 0 ? fmt(acc.pipeline) : '—'}</td></tr>))}</tbody></table></div></div>)}
         </section>
