@@ -1,56 +1,141 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Area, AreaChart } from 'recharts';
 import { TrendingUp, Target, Users, MapPin, Zap, ChevronDown, ChevronUp, X, Layers, Clock, DollarSign, AlertTriangle, CheckCircle, Upload, Calendar, AlertCircle, Sparkles, Edit3, Settings, Building, Globe, Download, StickyNote, Briefcase, FileText } from 'lucide-react';
+import { EMBEDDED_DATA } from './data.js';
 
 const TERRITORIES = ['US', 'Canada'];
 const LEAD_SOURCES = ['Inbound', 'Outbound', 'Partner', 'Referral'];
 const OPPORTUNITY_TYPES = ['New Business', 'Expansion', 'Upsell', 'Renewal'];
 const LOSS_REASONS = ['Price', 'Competition', 'No Budget', 'Timing', 'Product Fit', 'Champion Left'];
 const VERTICALS = ['Technology', 'Financial Services', 'Healthcare', 'Manufacturing', 'Retail', 'Media'];
-const YEARS = ['2022', '2023', '2024', '2025'];
-const verticalColors = { 'Technology': '#3b82f6', 'Financial Services': '#22c55e', 'Healthcare': '#ef4444', 'Manufacturing': '#f59e0b', 'Retail': '#8b5cf6', 'Media': '#ec4899' };
+const YEARS = ['2021', '2022', '2023', '2024', '2025'];
+const verticalColors = { 'Technology': '#3b82f6', 'Financial Services': '#22c55e', 'Healthcare': '#ef4444', 'Manufacturing': '#f59e0b', 'Retail': '#8b5cf6', 'Media': '#ec4899', 'CPG/Beauty': '#14b8a6', 'Food/Bev': '#f97316', 'Pharma': '#6366f1', 'Automotive': '#84cc16', 'Entertainment': '#a855f7', 'E-Commerce': '#0ea5e9', 'Other': '#737373' };
+
+// Decode embedded data into full opportunity objects
+const decodeEmbeddedData = () => {
+  if (!EMBEDDED_DATA) return { opps: [], reps: [] };
+  
+  const { reps, accounts, sources, verticals, lossReasons, custRels, data } = EMBEDDED_DATA;
+  const stageMap = ['Closed Won', 'Closed Lost', 'Pipeline'];
+  const typeMap = ['New Business', 'Expansion', 'Upsell', 'Renewal'];
+  const terMap = ['US', 'Canada'];
+  
+  const opps = data.map((row, i) => ({
+    id: `OPP-${i}`,
+    name: accounts[row[1]] || 'Unknown',
+    account: accounts[row[1]] || 'Unknown',
+    rep: reps[row[0]] || 'Unknown',
+    repTerritory: terMap[row[2]] || 'US',
+    territory: terMap[row[2]] || 'US',
+    source: sources[row[3]] || 'Unknown',
+    type: typeMap[row[4]] || 'New Business',
+    stage: stageMap[row[5]] || 'Pipeline',
+    amount: row[6] || 0,
+    year: String(row[7]),
+    quarter: `Q${row[8]}`,
+    month: row[9] || 1,
+    lossReason: row[10] >= 0 ? lossReasons[row[10]] : null,
+    vertical: verticals[row[11]] || 'Other',
+    daysInPipeline: row[12] || 0,
+    lastActivityDays: Math.min(row[12] || 0, 30),
+    customerRelationship: custRels[row[13]] || 'Unknown',
+    isKeyAccount: (row[6] || 0) > 100000,
+  }));
+  
+  // Build rep list with quotas
+  const repStats = {};
+  opps.forEach(o => {
+    if (!repStats[o.rep]) {
+      repStats[o.rep] = { name: o.rep, territory: o.territory, revenue: 0, quota: 500000 };
+    }
+    if (o.stage === 'Closed Won') {
+      repStats[o.rep].revenue += o.amount;
+    }
+  });
+  
+  const repList = Object.values(repStats).map(r => ({
+    ...r,
+    quota: Math.max(r.revenue * 1.2, 500000) // Set quota as 120% of revenue or minimum 500K
+  }));
+  
+  return { opps, reps: repList };
+};
+
+const REAL_DATA = decodeEmbeddedData();
 
 // Pipeline stages that count as active pipeline (Stage 2+)
 const PIPELINE_STAGES = ['Stage 2', 'Stage 3', 'Stage 4', 'Stage 5', 'Negotiation', 'Proposal', 'Qualification', 'Discovery', 'Evaluation'];
+
+// Helper to parse CSV line handling quoted values
+const parseCSVLine = (line, delimiter = ',') => {
+  const values = [];
+  let current = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === delimiter && !inQuotes) {
+      values.push(current);
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  values.push(current);
+  return values;
+};
 
 // Parse CSV from Salesforce export
 const parseCSV = (csvText) => {
   const lines = csvText.split('\n').filter(line => line.trim());
   if (lines.length < 2) return [];
   
-  // Parse header - handle both comma and tab separated
-  const delimiter = lines[0].includes('\t') ? '\t' : ',';
-  const headers = lines[0].split(delimiter).map(h => h.trim().replace(/"/g, ''));
+  // Parse header using same CSV parser to handle quoted values
+  const headers = parseCSVLine(lines[0], ',').map(h => h.trim().replace(/"/g, '').toLowerCase());
   
-  // Find column indices
+  console.log('CSV Headers found:', headers);
+  
+  // Find column indices - be specific to avoid wrong matches
   const colIndex = {
-    account: headers.findIndex(h => h.toLowerCase().includes('account name')),
-    rep: headers.findIndex(h => h.toLowerCase().includes('opportunity owner') && !h.toLowerCase().includes('manager')),
-    name: headers.findIndex(h => h.toLowerCase().includes('opportunity name')),
-    stage: headers.findIndex(h => h.toLowerCase() === 'stage'),
-    fiscalPeriod: headers.findIndex(h => h.toLowerCase().includes('fiscal period')),
-    age: headers.findIndex(h => h.toLowerCase() === 'age'),
-    closeDate: headers.findIndex(h => h.toLowerCase().includes('close date')),
-    createdDate: headers.findIndex(h => h.toLowerCase().includes('created date')),
-    source: headers.findIndex(h => h.toLowerCase().includes('lead source')),
-    type: headers.findIndex(h => h.toLowerCase() === 'type'),
-    currency: headers.findIndex(h => h.toLowerCase().includes('opportunity currency')),
-    vertical: headers.findIndex(h => h.toLowerCase() === 'vertical'),
-    amount: headers.findIndex(h => h.toLowerCase().includes('amount')),
-    customerRel: headers.findIndex(h => h.toLowerCase().includes('customer relationship')),
-    parentAccount: headers.findIndex(h => h.toLowerCase().includes('parent account')),
-    manager: headers.findIndex(h => h.toLowerCase().includes('manager')),
-    closedWhy: headers.findIndex(h => h.toLowerCase().includes('closed why') && !h.toLowerCase().includes('sub')),
-    closedWhySub: headers.findIndex(h => h.toLowerCase().includes('closed why') && h.toLowerCase().includes('sub')),
+    account: headers.indexOf('account name'),
+    rep: headers.indexOf('opportunity owner'),
+    name: headers.indexOf('opportunity name'),
+    stage: headers.indexOf('stage'),
+    fiscalPeriod: headers.indexOf('fiscal period'),
+    age: headers.indexOf('age'),
+    closeDate: headers.indexOf('close date'),
+    createdDate: headers.indexOf('created date'),
+    source: headers.indexOf('lead source'),
+    type: headers.indexOf('type'),
+    currency: headers.indexOf('opportunity currency'),
+    vertical: headers.indexOf('vertical'),
+    amount: headers.indexOf('amount (converted)'),
+    customerRel: headers.indexOf('customer relationship'),
+    parentAccount: headers.indexOf('parent account'),
+    logo: headers.indexOf('logo'),
+    closedWhy: headers.indexOf('closed why options'),
+    closedWhySub: headers.indexOf('closed why sub options'),
   };
+  
+  console.log('Column indices:', colIndex);
+  console.log('Amount column index:', colIndex.amount);
   
   const opps = [];
   
   for (let i = 1; i < lines.length; i++) {
-    const values = parseCSVLine(lines[i], delimiter);
+    const values = parseCSVLine(lines[i], ',');
     if (values.length < 5) continue;
     
     const getValue = (idx) => idx >= 0 && idx < values.length ? values[idx]?.trim().replace(/"/g, '') : '';
+    
+    // Debug first row
+    if (i === 1) {
+      console.log('First row values:', values);
+      console.log('Amount value:', getValue(colIndex.amount));
+      console.log('Stage value:', getValue(colIndex.stage));
+    }
     
     const stageName = getValue(colIndex.stage);
     const currency = getValue(colIndex.currency);
@@ -193,28 +278,9 @@ const parseCSV = (csvText) => {
     });
   }
   
+  console.log('Parsed opportunities:', opps.length);
+  console.log('Sample opp:', opps[0]);
   return opps;
-};
-
-// Helper to parse CSV line handling quoted values
-const parseCSVLine = (line, delimiter = ',') => {
-  const values = [];
-  let current = '';
-  let inQuotes = false;
-  
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    if (char === '"') {
-      inQuotes = !inQuotes;
-    } else if (char === delimiter && !inQuotes) {
-      values.push(current);
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-  values.push(current);
-  return values;
 };
 
 const generateData = () => {
@@ -390,9 +456,9 @@ const MetricCard = ({ label, value, prevValue, format = 'currency', goal, onClic
 const RiskItem = ({ icon: Icon, color, title, subtitle, value, onClick }) => (<div onClick={onClick} className="flex items-center justify-between p-3 rounded-xl bg-neutral-800 border border-neutral-700 hover:bg-neutral-700 cursor-pointer transition-all"><div className="flex items-center gap-3"><div className={`w-8 h-8 rounded-xl flex items-center justify-center ${color === 'red' ? 'bg-red-500/10' : 'bg-yellow-500/10'}`}><Icon size={16} className={color === 'red' ? 'text-red-500' : 'text-yellow-500'} /></div><div><p className="text-sm font-medium text-white">{title}</p><p className="text-xs text-neutral-500">{subtitle}</p></div></div><span className={`text-sm font-semibold ${color === 'red' ? 'text-red-400' : 'text-yellow-400'}`}>{value}</span></div>);
 
 export default function RevIntelDashboard() {
-  const [demoData] = useState(generateData);
+  const [demoData] = useState(REAL_DATA);
   const [uploadedData, setUploadedData] = useState(null);
-  const [dataSource, setDataSource] = useState('demo'); // 'demo' or 'uploaded'
+  const [dataSource, setDataSource] = useState('embedded'); // 'embedded' or 'uploaded'
   
   const rawData = uploadedData || demoData.opps;
   const initialReps = demoData.reps;
