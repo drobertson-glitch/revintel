@@ -8,7 +8,7 @@ const LEAD_SOURCES = ['Inbound', 'Outbound', 'Partner', 'Referral'];
 const OPPORTUNITY_TYPES = ['New Business', 'Expansion', 'Upsell', 'Renewal'];
 const LOSS_REASONS = ['Price', 'Competition', 'No Budget', 'Timing', 'Product Fit', 'Champion Left'];
 const VERTICALS = ['Technology', 'Financial Services', 'Healthcare', 'Manufacturing', 'Retail', 'Media'];
-const YEARS = ['2021', '2022', '2023', '2024', '2025'];
+const YEARS = ['2020', '2021', '2022', '2023', '2024', '2025'];
 const verticalColors = { 'Technology': '#3b82f6', 'Financial Services': '#22c55e', 'Healthcare': '#ef4444', 'Manufacturing': '#f59e0b', 'Retail': '#8b5cf6', 'Media': '#ec4899', 'CPG/Beauty': '#14b8a6', 'Food/Bev': '#f97316', 'Pharma': '#6366f1', 'Automotive': '#84cc16', 'Entertainment': '#a855f7', 'E-Commerce': '#0ea5e9', 'Other': '#737373' };
 
 // Decode embedded data into full opportunity objects
@@ -40,7 +40,7 @@ const decodeEmbeddedData = () => {
     lastActivityDays: Math.min(row[12] || 0, 30),
     customerRelationship: custRels[row[13]] || 'Unknown',
     isKeyAccount: (row[6] || 0) > 100000,
-  }));
+  })).filter(o => parseInt(o.year) >= 2020); // Filter out years before 2020
   
   // Build rep list with quotas
   const repStats = {};
@@ -782,8 +782,15 @@ export default function RevIntelDashboard() {
 
   return (
     <div className="min-h-screen bg-black text-white">
-      <header className="border-b border-white/5 sticky top-0 z-40 backdrop-blur-md" style={{ background: 'rgba(0,0,0,0.2)' }}>
+      <header className="border-b border-white/5 sticky top-0 z-40 backdrop-blur-md" style={{ background: 'rgba(0,0,0,0.8)' }}>
         <div className="max-w-[1400px] mx-auto px-6 py-3">
+          <div className="flex items-center justify-between mb-3">
+            <h1 className="text-lg font-semibold text-white">Revenue Intelligence</h1>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setShowAnnotations(true)} className="p-1.5 rounded-xl text-neutral-500 hover:text-white hover:bg-neutral-700 transition-all" title="Notes"><StickyNote size={16} /></button>
+              <button onClick={handleExport} className="p-1.5 rounded-xl text-neutral-500 hover:text-white hover:bg-neutral-700 transition-all" title="Export"><Download size={16} /></button>
+            </div>
+          </div>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-2 flex-wrap">
               <FilterDropdown label="Territory" values={territories} options={uniqueTerritories.length > 0 ? uniqueTerritories : TERRITORIES} onChange={setTerritories} icon={MapPin} />
@@ -796,17 +803,7 @@ export default function RevIntelDashboard() {
             <div className="flex items-center gap-2">
               <TimePeriodFilter selected={timePeriods} onChange={setTimePeriods} />
               <div className="h-4 w-px bg-neutral-800" />
-              <div className="flex items-center gap-1">{(uniqueYears.length > 0 ? uniqueYears : YEARS).map(y => (<button key={y} onClick={() => setActiveYears(prev => prev.includes(y) ? prev.filter(x => x !== y) : [...prev, y])} className={`px-2.5 py-1 rounded-xl text-xs font-medium transition-all ${activeYears.includes(y) ? 'bg-white text-black' : 'text-neutral-500 hover:text-white hover:bg-neutral-800'}`}>{y}</button>))}</div>
-              <div className="h-4 w-px bg-neutral-800" />
-              <button onClick={() => setShowAnnotations(true)} className="p-1.5 rounded-xl text-neutral-500 hover:text-white hover:bg-neutral-700 transition-all" title="Notes"><StickyNote size={16} /></button>
-              <button onClick={handleExport} className="p-1.5 rounded-xl text-neutral-500 hover:text-white hover:bg-neutral-700 transition-all" title="Export"><Download size={16} /></button>
-              <input type="file" ref={fileInputRef} accept=".csv" className="hidden" onChange={handleFileUpload} />
-              <button onClick={() => fileInputRef.current?.click()} className={`p-1.5 rounded-xl transition-all ${dataSource === 'uploaded' ? 'text-green-500 bg-green-500/10 hover:bg-green-500/20' : 'text-neutral-500 hover:text-white hover:bg-neutral-700'}`} title={dataSource === 'uploaded' ? 'CSV Loaded - Click to upload new' : 'Upload CSV'}><Upload size={16} /></button>
-              {dataSource === 'uploaded' && (
-                <button onClick={clearUploadedData} className="px-2 py-1 rounded-xl text-[10px] text-yellow-500 bg-yellow-500/10 hover:bg-yellow-500/20 transition-all">
-                  Using your data • Clear
-                </button>
-              )}
+              <div className="flex items-center gap-1">{(uniqueYears.length > 0 ? uniqueYears.filter(y => parseInt(y) >= 2020) : YEARS).map(y => (<button key={y} onClick={() => setActiveYears(prev => prev.includes(y) ? prev.filter(x => x !== y) : [...prev, y])} className={`px-2.5 py-1 rounded-xl text-xs font-medium transition-all ${activeYears.includes(y) ? 'bg-white text-black' : 'text-neutral-500 hover:text-white hover:bg-neutral-800'}`}>{y}</button>))}</div>
             </div>
           </div>
         </div>
