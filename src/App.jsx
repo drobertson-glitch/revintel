@@ -41,7 +41,7 @@ const parseCSV = (csvText) => {
     parentAccount: headers.findIndex(h => h.toLowerCase().includes('parent account')),
     manager: headers.findIndex(h => h.toLowerCase().includes('manager')),
     closedWhy: headers.findIndex(h => h.toLowerCase().includes('closed why') && !h.toLowerCase().includes('sub')),
-    closedWhySub: headers.findIndex(h => h.toLowerCase().includes('closed why sub')),
+    closedWhySub: headers.findIndex(h => h.toLowerCase().includes('closed why') && h.toLowerCase().includes('sub')),
   };
   
   const opps = [];
@@ -63,27 +63,33 @@ const parseCSV = (csvText) => {
     
     // Determine stage category
     let stageCategory = 'Pipeline';
-    const stageLower = stageName.toLowerCase();
-    if (stageLower.includes('closed won') || stageLower.includes('won')) {
+    const stageLower = stageName.toLowerCase().trim();
+    
+    if (stageLower === 'closed won') {
       stageCategory = 'Closed Won';
-    } else if (stageLower.includes('closed lost') || stageLower.includes('lost')) {
+    } else if (stageLower === 'closed lost') {
       stageCategory = 'Closed Lost';
     } else {
-      // Check if it's stage 2+ for pipeline
-      const stageMatch = stageName.match(/stage\s*(\d+)/i);
+      // Check if it starts with a number (e.g., "2. Discovery - Media Scoping")
+      const stageMatch = stageName.match(/^(\d+)\./);
       if (stageMatch) {
         const stageNum = parseInt(stageMatch[1]);
         if (stageNum < 2) continue; // Skip Stage 0 and Stage 1
+        stageCategory = 'Pipeline';
+      } else {
+        // If no number found and not closed, skip it
+        continue;
       }
     }
     
     // Parse territory from currency
     const territory = currency.toUpperCase().includes('CAD') ? 'Canada' : 'US';
     
-    // Parse amount
+    // Parse amount - handle plain numbers, with commas, or with $
     let amount = 0;
     if (amountStr) {
-      amount = parseFloat(amountStr.replace(/[$,]/g, '')) || 0;
+      const cleanAmount = amountStr.replace(/[$,\s]/g, '').trim();
+      amount = parseFloat(cleanAmount) || 0;
     }
     
     // Parse age/days in pipeline
