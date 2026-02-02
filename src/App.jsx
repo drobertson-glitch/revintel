@@ -8,7 +8,14 @@ const LEAD_SOURCES = ['Inbound', 'Outbound', 'Partner', 'Referral'];
 const OPPORTUNITY_TYPES = ['New Business', 'Expansion', 'Upsell', 'Renewal'];
 const LOSS_REASONS = ['Price', 'Competition', 'No Budget', 'Timing', 'Product Fit', 'Champion Left'];
 const VERTICALS = ['Technology', 'Financial Services', 'Healthcare', 'Manufacturing', 'Retail', 'Media'];
-const YEARS = ['2020', '2021', '2022', '2023', '2024', '2025'];
+const YEARS = ['2020', '2021', '2022', '2023', '2024', '2025', '2026'];
+const ANNUAL_GOALS = {
+  '2022': 16662000,
+  '2023': 35725000,
+  '2024': 38000000,
+  '2025': 55000000,
+  '2026': 65000000,
+};
 const verticalColors = { 'Technology': '#3b82f6', 'Financial Services': '#22c55e', 'Healthcare': '#ef4444', 'Manufacturing': '#f59e0b', 'Retail': '#8b5cf6', 'Media': '#ec4899', 'CPG/Beauty': '#14b8a6', 'Food/Bev': '#f97316', 'Pharma': '#6366f1', 'Automotive': '#84cc16', 'Entertainment': '#a855f7', 'E-Commerce': '#0ea5e9', 'Other': '#737373' };
 
 // Decode embedded data into full opportunity objects
@@ -40,7 +47,7 @@ const decodeEmbeddedData = () => {
     lastActivityDays: Math.min(row[12] || 0, 30),
     customerRelationship: custRels[row[13]] || 'Unknown',
     isKeyAccount: (row[6] || 0) > 100000,
-  })).filter(o => parseInt(o.year) >= 2020); // Filter out years before 2020
+  })).filter(o => parseInt(o.year) >= 2020 && parseInt(o.year) <= 2026); // Filter years 2020-2026
   
   // Build rep list with quotas
   const repStats = {};
@@ -481,17 +488,18 @@ export default function RevIntelDashboard() {
   const [focusedMetric, setFocusedMetric] = useState(null);
   const fileInputRef = useRef(null);
   
-  // Calculate sensible defaults based on actual data
+  // Calculate goal based on selected years
   const dataBasedGoals = useMemo(() => {
-    const wonDeals = rawData.filter(o => o.stage === 'Closed Won');
-    const totalWon = wonDeals.reduce((s, o) => s + o.amount, 0);
-    const avgDeal = wonDeals.length > 0 ? totalWon / wonDeals.length : 50000;
+    // Sum annual goals for selected years
+    const totalGoal = activeYears.reduce((sum, year) => sum + (ANNUAL_GOALS[year] || 0), 0);
+    const wonDeals = rawData.filter(o => o.stage === 'Closed Won' && activeYears.includes(o.year));
+    const avgDeal = wonDeals.length > 0 ? wonDeals.reduce((s, o) => s + o.amount, 0) / wonDeals.length : 50000;
     return {
-      revenue: Math.ceil(totalWon * 1.2 / 1000000) * 1000000, // 120% of actual, rounded to millions
-      pipeline: Math.ceil(totalWon * 1.5 / 1000000) * 1000000,
+      revenue: totalGoal || 55000000, // Default to 2025 goal if no years selected
+      pipeline: Math.ceil(totalGoal * 1.5 / 1000000) * 1000000 || 80000000,
       dealSize: Math.round(avgDeal / 1000) * 1000,
     };
-  }, [rawData]);
+  }, [rawData, activeYears]);
   
   const [goalRevenue, setGoalRevenue] = useState(null);
   const [goalPipeline, setGoalPipeline] = useState(null);
@@ -853,12 +861,12 @@ export default function RevIntelDashboard() {
           </section>
         </div>
 
-        <section className="mb-8">
+        <section className="mb-4">
           <button onClick={() => setShowVerticals(!showVerticals)} className="w-full flex items-center justify-between p-4 bg-neutral-800 border border-neutral-700 rounded-xl hover:bg-neutral-700 transition-all"><div className="flex items-center gap-3"><Briefcase size={16} className="text-neutral-400" /><span className="text-sm font-semibold">Vertical Performance</span><span className="text-xs text-neutral-500">{verticalAnalysis.length} verticals</span></div>{showVerticals ? <ChevronUp size={16} className="text-neutral-500" /> : <ChevronDown size={16} className="text-neutral-500" />}</button>
           {showVerticals && (<div className="mt-3 bg-neutral-800 border border-neutral-700 rounded-xl p-5">{verticalAnalysis.length === 0 ? <EmptyState icon={Briefcase} title="No data" /> : (<div className="grid grid-cols-3 gap-4">{verticalAnalysis.map(v => (<div key={v.name} onClick={() => setModal({ open: true, title: `${v.name} Deals`, data: filtered.filter(o => o.vertical === v.name) })} className="p-4 bg-neutral-700/30 rounded-xl hover:bg-neutral-700/50 cursor-pointer transition-all"><div className="flex items-center justify-between mb-2"><div className="flex items-center gap-2"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: v.color }} /><span className="text-sm font-medium">{v.name}</span></div>{v.change !== null && <span className={`text-xs ${v.change >= 0 ? 'text-green-500' : 'text-red-500'}`}>{v.change >= 0 ? '+' : ''}{(v.change * 100).toFixed(0)}%</span>}</div><div className="flex items-baseline justify-between"><span className="text-lg font-semibold">{fmt(v.revenue)}</span><span className={`text-xs ${v.winRate >= winRate ? 'text-green-400' : 'text-red-400'}`}>{pct(v.winRate)} WR</span></div>{v.topLossReason && <p className="text-[10px] text-neutral-500 mt-2">Top loss: {v.topLossReason}</p>}{v.pipeline > 0 && <p className="text-[10px] text-neutral-500">Pipeline: {fmt(v.pipeline)}</p>}</div>))}</div>)}</div>)}
         </section>
 
-        <section className="mb-8">
+        <section className="mb-4">
           <button onClick={() => setShowRetention(!showRetention)} className="w-full flex items-center justify-between p-4 bg-neutral-800 border border-neutral-700 rounded-xl hover:bg-neutral-700 transition-all">
             <div className="flex items-center gap-3"><TrendingUp size={16} className="text-neutral-400" /><span className="text-sm font-semibold">Retention Metrics</span><span className="text-xs text-neutral-500">NDR {pct(retentionMetrics.ndrAmount)}</span></div>
             {showRetention ? <ChevronUp size={16} className="text-neutral-500" /> : <ChevronDown size={16} className="text-neutral-500" />}
@@ -937,11 +945,14 @@ export default function RevIntelDashboard() {
               </div>
             </div>
           )}
+        </section>
+
+        <section className="mb-4">
           <button onClick={() => setShowAccounts(!showAccounts)} className="w-full flex items-center justify-between p-4 bg-neutral-800 border border-neutral-700 rounded-xl hover:bg-neutral-700 transition-all"><div className="flex items-center gap-3"><Building size={16} className="text-neutral-400" /><span className="text-sm font-semibold">Top 20 Accounts</span><span className="text-xs text-neutral-500">{pct(top20Analysis.top20PctOfBusiness)} of revenue</span></div>{showAccounts ? <ChevronUp size={16} className="text-neutral-500" /> : <ChevronDown size={16} className="text-neutral-500" />}</button>
           {showAccounts && (<div className="mt-3 bg-neutral-800 border border-neutral-700 rounded-xl p-5"><div className="mb-4 p-3 bg-neutral-700/50 rounded-xl"><p className="text-sm text-neutral-300">{top20Analysis.insight}</p></div><div className="mb-6"><h3 className="text-xs text-neutral-500 uppercase mb-3">% of Business Over Time</h3><div className="h-28"><ResponsiveContainer><AreaChart data={top20Analysis.trendData}><CartesianGrid strokeDasharray="3 3" stroke="#404040" /><XAxis dataKey="year" stroke="#525252" tick={{ fontSize: 10 }} /><YAxis tickFormatter={v => pct(v)} stroke="#525252" tick={{ fontSize: 10 }} domain={[0, 'auto']} /><Tooltip content={({ active, payload, label }) => active && payload?.length ? <div className="bg-neutral-800 border border-neutral-700 rounded-xl p-3 shadow-xl"><p className="text-xs text-neutral-300 mb-1">{label}</p><p className="text-sm text-white">{pct(payload[0].value)} of revenue</p></div> : null} /><Area type="monotone" dataKey="pctOfBusiness" stroke="#22c55e" fill="#22c55e" fillOpacity={0.1} strokeWidth={2} /></AreaChart></ResponsiveContainer></div></div><div className="overflow-auto max-h-64"><table className="w-full"><thead className="sticky top-0 bg-neutral-800"><tr className="text-[10px] text-neutral-500 uppercase"><th className="text-left py-2 px-2">Account</th><th className="text-left py-2 px-2">Vertical</th><th className="text-right py-2 px-2">Revenue</th><th className="text-right py-2 px-2">YoY</th><th className="text-right py-2 px-2">Pipeline</th></tr></thead><tbody className="divide-y divide-neutral-700">{top20Analysis.accounts.slice(0, 10).map((acc, i) => (<tr key={acc.name} className="hover:bg-neutral-700 cursor-pointer transition-all" onClick={() => setModal({ open: true, title: acc.name, subtitle: acc.vertical, data: filtered.filter(o => o.account === acc.name) })}><td className="py-2 px-2"><div className="flex items-center gap-2"><span className="w-5 h-5 rounded-lg bg-neutral-700 text-[10px] font-bold flex items-center justify-center text-neutral-400">{i + 1}</span><span className="text-sm text-white">{acc.name}</span></div></td><td className="py-2 px-2"><span className="text-xs px-2 py-0.5 rounded-lg" style={{ backgroundColor: `${verticalColors[acc.vertical] || '#737373'}20`, color: verticalColors[acc.vertical] || '#737373' }}>{acc.vertical}</span></td><td className="py-2 px-2 text-sm text-right font-medium">{fmt(acc.revenue)}</td><td className="py-2 px-2 text-sm text-right">{acc.change !== null ? <span className={acc.change >= 0 ? 'text-green-500' : 'text-red-500'}>{acc.change >= 0 ? '+' : ''}{(acc.change * 100).toFixed(0)}%</span> : <span className="text-neutral-600">—</span>}</td><td className="py-2 px-2 text-sm text-right text-neutral-400">{acc.pipeline > 0 ? fmt(acc.pipeline) : '—'}</td></tr>))}</tbody></table></div></div>)}
         </section>
 
-        {totalRisks > 0 && (<section className="mb-8"><button onClick={() => setShowRisks(!showRisks)} className="w-full flex items-center justify-between p-4 bg-neutral-800 border border-neutral-700 rounded-xl hover:bg-neutral-700 transition-all"><div className="flex items-center gap-3"><AlertTriangle size={16} className="text-yellow-500" /><span className="text-sm font-semibold">Risk Alerts</span><span className="px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 text-xs font-medium">{totalRisks}</span></div>{showRisks ? <ChevronUp size={16} className="text-neutral-500" /> : <ChevronDown size={16} className="text-neutral-500" />}</button>{showRisks && (<div className="mt-3 grid grid-cols-2 gap-3">{staleDeals.length > 0 && <RiskItem icon={Clock} color="yellow" title={`${staleDeals.length} stale deals`} subtitle="60+ days" value={fmt(staleDeals.reduce((s, d) => s + d.amount, 0))} onClick={() => setModal({ open: true, title: 'Stale Deals', data: staleDeals })} />}{repsAtRisk.length > 0 && <RiskItem icon={Users} color="red" title={`${repsAtRisk.length} reps at risk`} subtitle="<50% quota" value={fmt(repsAtRisk.reduce((s, r) => s + r.revenue, 0))} onClick={() => setModal({ open: true, title: 'At Risk Reps', data: filtered.filter(o => repsAtRisk.some(r => r.name === o.rep)) })} />}{noActivityDeals.length > 0 && <RiskItem icon={AlertCircle} color="yellow" title={`${noActivityDeals.length} need follow-up`} subtitle="14+ days" value={fmt(noActivityDeals.reduce((s, d) => s + d.amount, 0))} onClick={() => setModal({ open: true, title: 'Needs Follow-up', data: noActivityDeals })} />}{largeDealsAtRisk.length > 0 && <RiskItem icon={DollarSign} color="red" title={`${largeDealsAtRisk.length} large at risk`} subtitle="$100K+" value={fmt(largeDealsAtRisk.reduce((s, d) => s + d.amount, 0))} onClick={() => setModal({ open: true, title: 'Large Deals at Risk', data: largeDealsAtRisk })} />}</div>)}</section>)}
+        {totalRisks > 0 && (<section className="mb-4"><button onClick={() => setShowRisks(!showRisks)} className="w-full flex items-center justify-between p-4 bg-neutral-800 border border-neutral-700 rounded-xl hover:bg-neutral-700 transition-all"><div className="flex items-center gap-3"><AlertTriangle size={16} className="text-yellow-500" /><span className="text-sm font-semibold">Risk Alerts</span><span className="px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 text-xs font-medium">{totalRisks}</span></div>{showRisks ? <ChevronUp size={16} className="text-neutral-500" /> : <ChevronDown size={16} className="text-neutral-500" />}</button>{showRisks && (<div className="mt-3 grid grid-cols-2 gap-3">{staleDeals.length > 0 && <RiskItem icon={Clock} color="yellow" title={`${staleDeals.length} stale deals`} subtitle="60+ days" value={fmt(staleDeals.reduce((s, d) => s + d.amount, 0))} onClick={() => setModal({ open: true, title: 'Stale Deals', data: staleDeals })} />}{repsAtRisk.length > 0 && <RiskItem icon={Users} color="red" title={`${repsAtRisk.length} reps at risk`} subtitle="<50% quota" value={fmt(repsAtRisk.reduce((s, r) => s + r.revenue, 0))} onClick={() => setModal({ open: true, title: 'At Risk Reps', data: filtered.filter(o => repsAtRisk.some(r => r.name === o.rep)) })} />}{noActivityDeals.length > 0 && <RiskItem icon={AlertCircle} color="yellow" title={`${noActivityDeals.length} need follow-up`} subtitle="14+ days" value={fmt(noActivityDeals.reduce((s, d) => s + d.amount, 0))} onClick={() => setModal({ open: true, title: 'Needs Follow-up', data: noActivityDeals })} />}{largeDealsAtRisk.length > 0 && <RiskItem icon={DollarSign} color="red" title={`${largeDealsAtRisk.length} large at risk`} subtitle="$100K+" value={fmt(largeDealsAtRisk.reduce((s, d) => s + d.amount, 0))} onClick={() => setModal({ open: true, title: 'Large Deals at Risk', data: largeDealsAtRisk })} />}</div>)}</section>)}
 
         <section className="bg-neutral-800 border border-neutral-700 rounded-xl p-5">
           <h2 className="text-sm font-semibold mb-4">Rep Performance</h2>
