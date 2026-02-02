@@ -782,10 +782,10 @@ export default function RevIntelDashboard() {
 
   return (
     <div className="min-h-screen bg-black text-white">
-      <header className="border-b border-white/5 sticky top-0 z-40 backdrop-blur-md" style={{ background: 'rgba(0,0,0,0.8)' }}>
+      <header className="border-b border-white/5 sticky top-0 z-40 backdrop-blur-md" style={{ background: 'rgba(0,0,0,0.2)' }}>
         <div className="max-w-[1400px] mx-auto px-6 py-3">
           <div className="flex items-center justify-between mb-3">
-            <h1 className="text-lg font-semibold text-white">Revenue Intelligence</h1>
+            <h1 className="text-[10px] font-medium tracking-[0.2em] uppercase text-neutral-500">Revenue Intelligence</h1>
             <div className="flex items-center gap-2">
               <button onClick={() => setShowAnnotations(true)} className="p-1.5 rounded-xl text-neutral-500 hover:text-white hover:bg-neutral-700 transition-all" title="Notes"><StickyNote size={16} /></button>
               <button onClick={handleExport} className="p-1.5 rounded-xl text-neutral-500 hover:text-white hover:bg-neutral-700 transition-all" title="Export"><Download size={16} /></button>
