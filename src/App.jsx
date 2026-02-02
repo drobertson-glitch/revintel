@@ -481,16 +481,37 @@ export default function RevIntelDashboard() {
   const [focusedMetric, setFocusedMetric] = useState(null);
   const fileInputRef = useRef(null);
   
-  const [goalRevenue, setGoalRevenue] = useState(10000000);
-  const [goalPipeline, setGoalPipeline] = useState(15000000);
-  const [goalWinRate, setGoalWinRate] = useState(0.50);
+  // Calculate sensible defaults based on actual data
+  const dataBasedGoals = useMemo(() => {
+    const wonDeals = rawData.filter(o => o.stage === 'Closed Won');
+    const totalWon = wonDeals.reduce((s, o) => s + o.amount, 0);
+    const avgDeal = wonDeals.length > 0 ? totalWon / wonDeals.length : 50000;
+    return {
+      revenue: Math.ceil(totalWon * 1.2 / 1000000) * 1000000, // 120% of actual, rounded to millions
+      pipeline: Math.ceil(totalWon * 1.5 / 1000000) * 1000000,
+      dealSize: Math.round(avgDeal / 1000) * 1000,
+    };
+  }, [rawData]);
+  
+  const [goalRevenue, setGoalRevenue] = useState(null);
+  const [goalPipeline, setGoalPipeline] = useState(null);
+  const [goalWinRate, setGoalWinRate] = useState(0.35);
   const [goalCycle, setGoalCycle] = useState(45);
-  const [goalDealSize, setGoalDealSize] = useState(85000);
+  const [goalDealSize, setGoalDealSize] = useState(null);
   const [goalNDR, setGoalNDR] = useState(1.10);
   const [goalGDR, setGoalGDR] = useState(0.90);
   
+  // Use data-based defaults if not manually set
+  const effectiveGoalRevenue = goalRevenue ?? dataBasedGoals.revenue;
+  const effectiveGoalPipeline = goalPipeline ?? dataBasedGoals.pipeline;
+  const effectiveGoalDealSize = goalDealSize ?? dataBasedGoals.dealSize;
+  
   const [repQuotas, setRepQuotas] = useState(() => { const q = {}; initialReps.forEach(r => { q[r.name] = r.quota; }); return q; });
   const updateRepQuota = (name, val) => setRepQuotas(prev => ({ ...prev, [name]: val }));
+  
+  // Territory quotas
+  const [territoryQuotas, setTerritoryQuotas] = useState({ 'US': 120000000, 'Canada': 40000000 });
+  const updateTerritoryQuota = (territory, val) => setTerritoryQuotas(prev => ({ ...prev, [territory]: val }));
 
   useEffect(() => { const t = setTimeout(() => setIsLoading(false), 500); return () => clearTimeout(t); }, []);
   useEffect(() => { const h = e => { const m = ['winRate', 'dealSize', 'cycle', 'pipeline']; const i = m.indexOf(focusedMetric); if (e.key === 'ArrowRight' && i < m.length - 1) setFocusedMetric(m[i + 1]); else if (e.key === 'ArrowLeft' && i > 0) setFocusedMetric(m[i - 1]); else if (e.key === 'Escape') setFocusedMetric(null); }; window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h); }, [focusedMetric]);
@@ -526,7 +547,7 @@ export default function RevIntelDashboard() {
   const pipelineValue = pipeline.reduce((s, o) => s + o.amount, 0);
   const prevPipelineValue = prevYearData.filter(o => o.stage === 'Pipeline').reduce((s, o) => s + o.amount, 0);
   const forecastTotal = totalRevenue + pipelineValue;
-  const forecastAttainment = goalRevenue > 0 ? forecastTotal / goalRevenue : 0;
+  const forecastAttainment = effectiveGoalRevenue > 0 ? forecastTotal / effectiveGoalRevenue : 0;
 
   // Retention metrics - by amount (NDR/GDR) and by logo count
   const retentionMetrics = useMemo(() => {
@@ -618,7 +639,21 @@ export default function RevIntelDashboard() {
 
   const repPerformance = useMemo(() => { const r = {}; filtered.forEach(o => { if (!r[o.rep]) r[o.rep] = { won: 0, lost: 0, revenue: 0, pipeline: 0, territory: o.repTerritory || o.territory }; if (o.stage === 'Closed Won') { r[o.rep].won++; r[o.rep].revenue += o.amount; } if (o.stage === 'Closed Lost') r[o.rep].lost++; if (o.stage === 'Pipeline') r[o.rep].pipeline += o.amount; }); return Object.entries(r).map(([name, d]) => ({ name, ...d, quota: repQuotas[name] || 500000, winRate: (d.won + d.lost) > 0 ? d.won / (d.won + d.lost) : 0, attainment: d.revenue / (repQuotas[name] || 500000) })).sort((a, b) => b.revenue - a.revenue); }, [filtered, repQuotas]);
 
-  const territoryQuotaAtt = useMemo(() => { const bt = {}; repPerformance.forEach(r => { if (!bt[r.territory]) bt[r.territory] = { totalQuota: 0, totalRevenue: 0, reps: [] }; bt[r.territory].totalQuota += r.quota; bt[r.territory].totalRevenue += r.revenue; bt[r.territory].reps.push(r); }); return Object.entries(bt).map(([territory, d]) => ({ territory, ...d, attainment: d.totalQuota > 0 ? d.totalRevenue / d.totalQuota : 0, repCount: d.reps.length })).sort((a, b) => b.attainment - a.attainment); }, [repPerformance]);
+  const territoryQuotaAtt = useMemo(() => { 
+    const bt = {}; 
+    repPerformance.forEach(r => { 
+      if (!bt[r.territory]) bt[r.territory] = { totalRevenue: 0, reps: [] }; 
+      bt[r.territory].totalRevenue += r.revenue; 
+      bt[r.territory].reps.push(r); 
+    }); 
+    return Object.entries(bt).map(([territory, d]) => ({ 
+      territory, 
+      ...d, 
+      totalQuota: territoryQuotas[territory] || 50000000,
+      attainment: (territoryQuotas[territory] || 50000000) > 0 ? d.totalRevenue / (territoryQuotas[territory] || 50000000) : 0, 
+      repCount: d.reps.length 
+    })).sort((a, b) => b.attainment - a.attainment); 
+  }, [repPerformance, territoryQuotas]);
 
   const staleDeals = useMemo(() => pipeline.filter(o => o.daysInPipeline > 60 && o.amount > 30000).sort((a, b) => b.amount - a.amount), [pipeline]);
   const repsAtRisk = useMemo(() => repPerformance.filter(r => r.attainment < 0.5 && (r.won + r.lost) >= 2), [repPerformance]);
@@ -631,7 +666,7 @@ export default function RevIntelDashboard() {
     const actions = [];
     
     // 1. Gap analysis
-    const gap = goalRevenue - forecastTotal;
+    const gap = effectiveGoalRevenue - forecastTotal;
     if (gap > 0) {
       const dealsNeeded = avgDealSize > 0 ? Math.ceil(gap / avgDealSize) : 0;
       insights.push(`${fmt(gap)} gap to goal (${dealsNeeded} deals needed)`);
@@ -684,7 +719,7 @@ export default function RevIntelDashboard() {
     }
     
     // 6. Pipeline coverage
-    const remainingGoal = goalRevenue - totalRevenue;
+    const remainingGoal = effectiveGoalRevenue - totalRevenue;
     const pipelineCoverage = remainingGoal > 0 ? pipelineValue / remainingGoal : 999;
     if (pipelineCoverage < 2.5 && gap > 0) {
       insights.push(`Pipeline coverage only ${pipelineCoverage.toFixed(1)}x`);
@@ -692,7 +727,7 @@ export default function RevIntelDashboard() {
     }
     
     return { insights: insights.slice(0, 3), actions: actions.slice(0, 3) };
-  }, [forecastTotal, goalRevenue, avgDealSize, winRate, prevWinRate, lossReasons, verticalAnalysis, sourcePerformance, territoryData, avgCycle, goalCycle, pipelineValue, totalRevenue]);
+  }, [forecastTotal, effectiveGoalRevenue, avgDealSize, winRate, prevWinRate, lossReasons, verticalAnalysis, sourcePerformance, territoryData, avgCycle, goalCycle, pipelineValue, totalRevenue]);
 
   const primaryAction = useMemo(() => {
     const bv = verticalAnalysis.find(v => v.winRate < 0.35 && (v.won + v.lost) >= 5);
@@ -781,7 +816,7 @@ export default function RevIntelDashboard() {
         <section className="mb-8">
           <div className="flex gap-6">
             <div className="flex-shrink-0 w-56">
-              <div className="flex items-center gap-2 mb-2"><p className="text-xs text-neutral-500 uppercase tracking-wider">Forecast vs Goal</p><EditableValue value={goalRevenue} onChange={setGoalRevenue} format="currency" size="xs" /></div>
+              <div className="flex items-center gap-2 mb-2"><p className="text-xs text-neutral-500 uppercase tracking-wider">Forecast vs Goal</p><EditableValue value={effectiveGoalRevenue} onChange={setGoalRevenue} format="currency" size="xs" /></div>
               <span className="text-5xl font-bold tracking-tight" style={{ color: forecastColor }}>{pct(forecastAttainment)}</span>
               <div className="mt-3 space-y-1"><div className="flex items-center justify-between text-xs"><div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-white" /><span className="text-neutral-400">Closed</span></div><span className="text-white font-medium">{fmt(totalRevenue)}</span></div><div className="flex items-center justify-between text-xs"><div className="flex items-center gap-1.5"><div className="w-2 h-2 rounded-full bg-neutral-600" /><span className="text-neutral-400">Forecast</span></div><span className="text-neutral-300">{fmt(pipelineValue)}</span></div></div>
             </div>
@@ -799,11 +834,11 @@ export default function RevIntelDashboard() {
               </div>
               <div className="grid grid-cols-4 gap-4 pt-4 border-t border-neutral-700">
                 <MetricCard label="Win Rate" value={winRate} prevValue={prevWinRate} format="percent" goal={goalWinRate} focused={focusedMetric === 'winRate'} onClick={() => { setFocusedMetric('winRate'); setModal({ open: true, title: 'Closed Deals', subtitle: `${won.length} won, ${lost.length} lost`, data: [...won, ...lost] }); }} />
-                <MetricCard label="Avg Deal Size" value={avgDealSize} prevValue={prevAvgDealSize} format="currency" goal={goalDealSize} focused={focusedMetric === 'dealSize'} onClick={() => { setFocusedMetric('dealSize'); setModal({ open: true, title: 'Won Deals', data: won.sort((a, b) => b.amount - a.amount) }); }} />
+                <MetricCard label="Avg Deal Size" value={avgDealSize} prevValue={prevAvgDealSize} format="currency" goal={effectiveGoalDealSize} focused={focusedMetric === 'dealSize'} onClick={() => { setFocusedMetric('dealSize'); setModal({ open: true, title: 'Won Deals', data: won.sort((a, b) => b.amount - a.amount) }); }} />
                 <MetricCard label="Sales Cycle" value={avgCycle} prevValue={prevAvgCycle} format="days" goal={goalCycle} focused={focusedMetric === 'cycle'} onClick={() => { setFocusedMetric('cycle'); setModal({ open: true, title: 'Cycle Analysis', data: won.sort((a, b) => b.daysInPipeline - a.daysInPipeline) }); }} />
-                <MetricCard label="Pipeline" value={pipelineValue} prevValue={prevPipelineValue} format="currency" goal={goalPipeline} focused={focusedMetric === 'pipeline'} onClick={() => { setFocusedMetric('pipeline'); setModal({ open: true, title: 'Pipeline', data: pipeline.sort((a, b) => b.amount - a.amount) }); }} />
+                <MetricCard label="Pipeline" value={pipelineValue} prevValue={prevPipelineValue} format="currency" goal={effectiveGoalPipeline} focused={focusedMetric === 'pipeline'} onClick={() => { setFocusedMetric('pipeline'); setModal({ open: true, title: 'Pipeline', data: pipeline.sort((a, b) => b.amount - a.amount) }); }} />
               </div>
-              <div className="mt-4 pt-3 border-t border-neutral-700 flex items-center gap-4 text-[10px] text-neutral-500 flex-wrap"><Settings size={10} /><span>Goals:</span><span>WR <EditableValue value={goalWinRate} onChange={setGoalWinRate} format="percent" size="xs" /></span><span>Deal <EditableValue value={goalDealSize} onChange={setGoalDealSize} format="currency" size="xs" /></span><span>Cycle <EditableValue value={goalCycle} onChange={setGoalCycle} format="days" size="xs" /></span><span>Pipeline <EditableValue value={goalPipeline} onChange={setGoalPipeline} format="currency" size="xs" /></span></div>
+              <div className="mt-4 pt-3 border-t border-neutral-700 flex items-center gap-4 text-[10px] text-neutral-500 flex-wrap"><Settings size={10} /><span>Goals:</span><span>WR <EditableValue value={goalWinRate} onChange={setGoalWinRate} format="percent" size="xs" /></span><span>Deal <EditableValue value={effectiveGoalDealSize} onChange={setGoalDealSize} format="currency" size="xs" /></span><span>Cycle <EditableValue value={goalCycle} onChange={setGoalCycle} format="days" size="xs" /></span><span>Pipeline <EditableValue value={effectiveGoalPipeline} onChange={setGoalPipeline} format="currency" size="xs" /></span></div>
             </div>
           </div>
         </section>
@@ -909,11 +944,11 @@ export default function RevIntelDashboard() {
           {showAccounts && (<div className="mt-3 bg-neutral-800 border border-neutral-700 rounded-xl p-5"><div className="mb-4 p-3 bg-neutral-700/50 rounded-xl"><p className="text-sm text-neutral-300">{top20Analysis.insight}</p></div><div className="mb-6"><h3 className="text-xs text-neutral-500 uppercase mb-3">% of Business Over Time</h3><div className="h-28"><ResponsiveContainer><AreaChart data={top20Analysis.trendData}><CartesianGrid strokeDasharray="3 3" stroke="#404040" /><XAxis dataKey="year" stroke="#525252" tick={{ fontSize: 10 }} /><YAxis tickFormatter={v => pct(v)} stroke="#525252" tick={{ fontSize: 10 }} domain={[0, 'auto']} /><Tooltip content={({ active, payload, label }) => active && payload?.length ? <div className="bg-neutral-800 border border-neutral-700 rounded-xl p-3 shadow-xl"><p className="text-xs text-neutral-300 mb-1">{label}</p><p className="text-sm text-white">{pct(payload[0].value)} of revenue</p></div> : null} /><Area type="monotone" dataKey="pctOfBusiness" stroke="#22c55e" fill="#22c55e" fillOpacity={0.1} strokeWidth={2} /></AreaChart></ResponsiveContainer></div></div><div className="overflow-auto max-h-64"><table className="w-full"><thead className="sticky top-0 bg-neutral-800"><tr className="text-[10px] text-neutral-500 uppercase"><th className="text-left py-2 px-2">Account</th><th className="text-left py-2 px-2">Vertical</th><th className="text-right py-2 px-2">Revenue</th><th className="text-right py-2 px-2">YoY</th><th className="text-right py-2 px-2">Pipeline</th></tr></thead><tbody className="divide-y divide-neutral-700">{top20Analysis.accounts.slice(0, 10).map((acc, i) => (<tr key={acc.name} className="hover:bg-neutral-700 cursor-pointer transition-all" onClick={() => setModal({ open: true, title: acc.name, subtitle: acc.vertical, data: filtered.filter(o => o.account === acc.name) })}><td className="py-2 px-2"><div className="flex items-center gap-2"><span className="w-5 h-5 rounded-lg bg-neutral-700 text-[10px] font-bold flex items-center justify-center text-neutral-400">{i + 1}</span><span className="text-sm text-white">{acc.name}</span></div></td><td className="py-2 px-2"><span className="text-xs px-2 py-0.5 rounded-lg" style={{ backgroundColor: `${verticalColors[acc.vertical] || '#737373'}20`, color: verticalColors[acc.vertical] || '#737373' }}>{acc.vertical}</span></td><td className="py-2 px-2 text-sm text-right font-medium">{fmt(acc.revenue)}</td><td className="py-2 px-2 text-sm text-right">{acc.change !== null ? <span className={acc.change >= 0 ? 'text-green-500' : 'text-red-500'}>{acc.change >= 0 ? '+' : ''}{(acc.change * 100).toFixed(0)}%</span> : <span className="text-neutral-600">—</span>}</td><td className="py-2 px-2 text-sm text-right text-neutral-400">{acc.pipeline > 0 ? fmt(acc.pipeline) : '—'}</td></tr>))}</tbody></table></div></div>)}
         </section>
 
-        {totalRisks > 0 && (<section className="mb-8"><button onClick={() => setShowRisks(!showRisks)} className="w-full flex items-center justify-between p-4 bg-neutral-800 border border-neutral-700 rounded-xl hover:bg-neutral-700 transition-all"><div className="flex items-center gap-3"><AlertTriangle size={16} className="text-yellow-500" /><span className="text-sm font-semibold">Risk Alerts</span><span className="px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 text-xs font-medium">{totalRisks}</span></div>{showRisks ? <ChevronUp size={16} className="text-neutral-500" /> : <ChevronDown size={16} className="text-neutral-500" />}</button>{showRisks && (<div className="mt-3 grid grid-cols-2 gap-3">{staleDeals.length > 0 && <RiskItem icon={Clock} color="yellow" title={`${staleDeals.length} stale deals`} subtitle="60+ days" value={fmt(staleDeals.reduce((s, d) => s + d.amount, 0))} onClick={() => setModal({ open: true, title: 'Stale Deals', data: staleDeals })} />}{repsAtRisk.length > 0 && <RiskItem icon={Users} color="red" title={`${repsAtRisk.length} reps at risk`} subtitle="<50% quota" value={repsAtRisk.map(r => r.name.split(' ')[0]).join(', ')} onClick={() => setModal({ open: true, title: 'At Risk Reps', data: filtered.filter(o => repsAtRisk.some(r => r.name === o.rep)) })} />}{noActivityDeals.length > 0 && <RiskItem icon={AlertCircle} color="yellow" title={`${noActivityDeals.length} need follow-up`} subtitle="14+ days" value={fmt(noActivityDeals.reduce((s, d) => s + d.amount, 0))} onClick={() => setModal({ open: true, title: 'Needs Follow-up', data: noActivityDeals })} />}{largeDealsAtRisk.length > 0 && <RiskItem icon={DollarSign} color="red" title={`${largeDealsAtRisk.length} large at risk`} subtitle="$100K+" value={fmt(largeDealsAtRisk.reduce((s, d) => s + d.amount, 0))} onClick={() => setModal({ open: true, title: 'Large Deals at Risk', data: largeDealsAtRisk })} />}</div>)}</section>)}
+        {totalRisks > 0 && (<section className="mb-8"><button onClick={() => setShowRisks(!showRisks)} className="w-full flex items-center justify-between p-4 bg-neutral-800 border border-neutral-700 rounded-xl hover:bg-neutral-700 transition-all"><div className="flex items-center gap-3"><AlertTriangle size={16} className="text-yellow-500" /><span className="text-sm font-semibold">Risk Alerts</span><span className="px-2 py-0.5 rounded-full bg-yellow-500/20 text-yellow-400 text-xs font-medium">{totalRisks}</span></div>{showRisks ? <ChevronUp size={16} className="text-neutral-500" /> : <ChevronDown size={16} className="text-neutral-500" />}</button>{showRisks && (<div className="mt-3 grid grid-cols-2 gap-3">{staleDeals.length > 0 && <RiskItem icon={Clock} color="yellow" title={`${staleDeals.length} stale deals`} subtitle="60+ days" value={fmt(staleDeals.reduce((s, d) => s + d.amount, 0))} onClick={() => setModal({ open: true, title: 'Stale Deals', data: staleDeals })} />}{repsAtRisk.length > 0 && <RiskItem icon={Users} color="red" title={`${repsAtRisk.length} reps at risk`} subtitle="<50% quota" value={fmt(repsAtRisk.reduce((s, r) => s + r.revenue, 0))} onClick={() => setModal({ open: true, title: 'At Risk Reps', data: filtered.filter(o => repsAtRisk.some(r => r.name === o.rep)) })} />}{noActivityDeals.length > 0 && <RiskItem icon={AlertCircle} color="yellow" title={`${noActivityDeals.length} need follow-up`} subtitle="14+ days" value={fmt(noActivityDeals.reduce((s, d) => s + d.amount, 0))} onClick={() => setModal({ open: true, title: 'Needs Follow-up', data: noActivityDeals })} />}{largeDealsAtRisk.length > 0 && <RiskItem icon={DollarSign} color="red" title={`${largeDealsAtRisk.length} large at risk`} subtitle="$100K+" value={fmt(largeDealsAtRisk.reduce((s, d) => s + d.amount, 0))} onClick={() => setModal({ open: true, title: 'Large Deals at Risk', data: largeDealsAtRisk })} />}</div>)}</section>)}
 
         <section className="bg-neutral-800 border border-neutral-700 rounded-xl p-5">
           <h2 className="text-sm font-semibold mb-4">Rep Performance</h2>
-          <div className="mb-6 p-4 bg-neutral-700/30 rounded-xl"><h3 className="text-xs text-neutral-500 uppercase mb-3 flex items-center gap-2"><Globe size={12} /> Territory Quota Attainment</h3>{territoryQuotaAtt.length === 0 ? <p className="text-sm text-neutral-500">No data</p> : (<div className="grid grid-cols-2 gap-4">{territoryQuotaAtt.map(t => (<div key={t.territory} className="flex items-center justify-between"><div><span className="text-sm font-medium">{t.territory}</span><span className="text-xs text-neutral-500 ml-2">{t.repCount} reps</span></div><div className="flex items-center gap-3"><div className="w-24 h-1.5 bg-neutral-700 rounded-full overflow-hidden"><div className={`h-full rounded-full ${t.attainment >= 1 ? 'bg-green-500' : t.attainment >= 0.7 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(t.attainment * 100, 100)}%` }} /></div><span className={`text-sm font-semibold w-12 text-right ${t.attainment >= 1 ? 'text-green-400' : t.attainment >= 0.7 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(t.attainment)}</span></div></div>))}</div>)}</div>
+          <div className="mb-6 p-4 bg-neutral-700/30 rounded-xl"><h3 className="text-xs text-neutral-500 uppercase mb-3 flex items-center gap-2"><Globe size={12} /> Territory Quota Attainment</h3>{territoryQuotaAtt.length === 0 ? <p className="text-sm text-neutral-500">No data</p> : (<div className="space-y-3">{territoryQuotaAtt.map(t => (<div key={t.territory} className="flex items-center justify-between"><div className="flex items-center gap-3"><span className="text-sm font-medium w-16">{t.territory}</span><span className="text-xs text-neutral-500">{t.repCount} reps</span><span className="text-xs text-neutral-600">|</span><span className="text-xs text-neutral-500">{fmt(t.totalRevenue)} / </span><EditableValue value={t.totalQuota} onChange={(v) => updateTerritoryQuota(t.territory, v)} format="currency" size="xs" /></div><div className="flex items-center gap-3"><div className="w-32 h-1.5 bg-neutral-700 rounded-full overflow-hidden"><div className={`h-full rounded-full ${t.attainment >= 1 ? 'bg-green-500' : t.attainment >= 0.7 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(t.attainment * 100, 100)}%` }} /></div><span className={`text-sm font-semibold w-12 text-right ${t.attainment >= 1 ? 'text-green-400' : t.attainment >= 0.7 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(t.attainment)}</span></div></div>))}</div>)}</div>
           {repPerformance.length === 0 ? <EmptyState icon={Users} title="No reps" /> : (<div className="grid grid-cols-6 gap-3">{repPerformance.slice(0, 6).map((r, i) => (<div key={r.name} onClick={() => setModal({ open: true, title: r.name, subtitle: `${r.territory} • ${r.won}W/${r.lost}L`, data: filtered.filter(o => o.rep === r.name) })} className="text-center p-3 rounded-xl bg-neutral-700/30 border border-neutral-700 hover:bg-neutral-700 cursor-pointer transition-all"><div className={`w-10 h-10 rounded-full mx-auto mb-2 flex items-center justify-center text-xs font-bold ${i === 0 ? 'bg-green-500 text-black' : r.attainment < 0.5 ? 'bg-red-500/20 text-red-400 ring-1 ring-red-500/30' : 'bg-neutral-600 text-white'}`}>{r.name.split(' ').map(n => n[0]).join('')}</div><p className="text-xs font-medium truncate">{r.name.split(' ')[0]}</p><p className="text-[10px] text-neutral-500">{r.territory}</p><p className="text-sm font-semibold mt-1">{fmt(r.revenue)}</p><div className="mt-1.5 h-1 bg-neutral-700 rounded-full overflow-hidden"><div className={`h-full rounded-full ${r.attainment >= 1 ? 'bg-green-500' : r.attainment >= 0.7 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(r.attainment * 100, 100)}%` }} /></div><div className="flex items-center justify-center gap-1 mt-1"><span className={`text-[10px] ${r.attainment >= 1 ? 'text-green-400' : r.attainment >= 0.7 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(r.attainment)}</span><span className="text-[10px] text-neutral-600">/</span><EditableValue value={r.quota} onChange={v => updateRepQuota(r.name, v)} format="currency" size="xs" /></div></div>))}</div>)}
         </section>
       </main>
