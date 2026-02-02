@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useEffect } from 'react';
 import { XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, Area, AreaChart } from 'recharts';
-import { TrendingUp, Target, Users, MapPin, Zap, ChevronDown, ChevronUp, X, Layers, Clock, DollarSign, AlertTriangle, CheckCircle, Upload, Calendar, AlertCircle, Sparkles, Edit3, Settings, Building, Globe, Download, StickyNote, Briefcase, FileText } from 'lucide-react';
+import { TrendingUp, Target, Users, MapPin, Zap, ChevronDown, ChevronUp, X, Layers, Clock, DollarSign, AlertTriangle, CheckCircle, Upload, Calendar, AlertCircle, Sparkles, Edit3, Settings, Building, Globe, Download, StickyNote, Briefcase, FileText, Maximize2, Minimize2 } from 'lucide-react';
 import { EMBEDDED_DATA } from './data.js';
 
 const TERRITORIES = ['US', 'Canada'];
@@ -22,33 +22,46 @@ const PIPELINE_GOALS_2026 = {
   'Q3': 40742500,
   'Q4': 39502115,
 };
-// Rep quotas from planning spreadsheet - keys match Salesforce "Opportunity Owner" field
+// Only these reps should appear in Rep Performance - from planning spreadsheet
+const KNOWN_REPS = [
+  'Courtney Sands',
+  'Natalie Hitt', 
+  'Lena Perlmutter',
+  'Sarah Kenny',
+  'Hannah Wasson',
+  'Max Houde Schulman',
+  'Gretchan Nicholson',
+  'Alex Welzel',
+  'Alexsandra Welzel',
+  'Zoe George',
+  'Jonny Wiebe',
+  'Cas Harding - Whatman',
+  'Cas Harding',
+];
+// Rep quotas from planning spreadsheet
 const REP_QUOTAS = {
-  // Jenna Ernster's team
   'Courtney Sands': { '2025': 6200000, '2026': 6273145 },
   'Natalie Hitt': { '2025': 6200000, '2026': 5026687 },
   'Lena Perlmutter': { '2025': 5600000, '2026': 7838600 },
   'Sarah Kenny': { '2025': 3600000, '2026': 6650000 },
   'Hannah Wasson': { '2025': 1920000, '2026': 3704580 },
-  // Katie Herrick's team  
   'Max Houde Schulman': { '2025': 2700000, '2026': 6540000 },
   'Gretchan Nicholson': { '2025': 2612700, '2026': 4064000 },
-  // Jeanette Rees's team
   'Alex Welzel': { '2025': 8500000, '2026': 7650000 },
-  'Alexsandra Welzel': { '2025': 8500000, '2026': 7650000 }, // Alternate name
+  'Alexsandra Welzel': { '2025': 8500000, '2026': 7650000 },
   'Zoe George': { '2025': 4600000, '2026': 3400000 },
   'Jonny Wiebe': { '2025': 2400000, '2026': 3700000 },
   'Cas Harding - Whatman': { '2025': 4800000, '2026': 5500000 },
-  'Cas Harding': { '2025': 4800000, '2026': 5500000 }, // Alternate name
+  'Cas Harding': { '2025': 4800000, '2026': 5500000 },
 };
 const GOAL_DEAL_SIZE = 120000;
 const verticalColors = { 'Technology': '#3b82f6', 'Financial Services': '#22c55e', 'Healthcare': '#ef4444', 'Manufacturing': '#f59e0b', 'Retail': '#8b5cf6', 'Media': '#ec4899', 'CPG/Beauty': '#14b8a6', 'Food/Bev': '#f97316', 'Pharma': '#6366f1', 'Automotive': '#84cc16', 'Entertainment': '#a855f7', 'E-Commerce': '#0ea5e9', 'Other': '#737373' };
 
 // Decode embedded data into full opportunity objects
 const decodeEmbeddedData = () => {
-  if (!EMBEDDED_DATA) return { opps: [], reps: [] };
+  if (!EMBEDDED_DATA) return { opps: [], reps: [], accountYearRevenue: {} };
   
-  const { reps, accounts, sources, verticals, lossReasons, custRels, data } = EMBEDDED_DATA;
+  const { reps, accounts, sources, verticals, lossReasons, custRels, data, accountYearRevenue } = EMBEDDED_DATA;
   const stageMap = ['Closed Won', 'Closed Lost', 'Pipeline'];
   const typeMap = ['New Business', 'Expansion', 'Upsell', 'Renewal'];
   const terMap = ['US', 'Canada'];
@@ -91,10 +104,11 @@ const decodeEmbeddedData = () => {
     quota: Math.max(r.revenue * 1.2, 500000) // Set quota as 120% of revenue or minimum 500K
   }));
   
-  return { opps, reps: repList };
+  return { opps, reps: repList, accountYearRevenue: accountYearRevenue || {} };
 };
 
 const REAL_DATA = decodeEmbeddedData();
+const ACCOUNT_YEAR_REVENUE = REAL_DATA.accountYearRevenue;
 
 // Pipeline stages that count as active pipeline (Stage 2+)
 const PIPELINE_STAGES = ['Stage 2', 'Stage 3', 'Stage 4', 'Stage 5', 'Negotiation', 'Proposal', 'Qualification', 'Discovery', 'Evaluation'];
@@ -505,6 +519,7 @@ export default function RevIntelDashboard() {
   const [timePeriods, setTimePeriods] = useState(['All']);
   const [modal, setModal] = useState({ open: false, title: '', subtitle: '', data: [] });
   const [showRisks, setShowRisks] = useState(true);
+  const [presentationMode, setPresentationMode] = useState(false);
   const [showAccounts, setShowAccounts] = useState(true);
   const [showVerticals, setShowVerticals] = useState(true);
   const [showRetention, setShowRetention] = useState(true);
@@ -594,62 +609,124 @@ export default function RevIntelDashboard() {
   const forecastTotal = totalRevenue + pipelineValue;
   const forecastAttainment = effectiveGoalRevenue > 0 ? forecastTotal / effectiveGoalRevenue : 0;
 
-  // Retention metrics - by amount (NDR/GDR) and by logo count
+  // Retention metrics - calculated from actual account revenue by year
+  // Uses ACCOUNT_YEAR_REVENUE which tracks each account's revenue per year
   const retentionMetrics = useMemo(() => {
-    // Get existing customers (Expansion, Upsell, Renewal types indicate existing customers)
-    const existingCustomerTypes = ['Expansion', 'Upsell', 'Renewal'];
+    // Determine the years we're analyzing based on activeYears
+    const sortedYears = [...activeYears].sort();
+    if (sortedYears.length === 0) {
+      return { ndrAmount: null, gdrAmount: null, ndrLogo: null, gdrLogo: null, hasData: false };
+    }
     
-    // Current period - existing customer revenue
-    const currentExistingWon = won.filter(o => existingCustomerTypes.includes(o.type));
-    const currentExistingLost = lost.filter(o => existingCustomerTypes.includes(o.type));
-    const currentExistingRevenue = currentExistingWon.reduce((s, o) => s + o.amount, 0);
-    const currentChurnRevenue = currentExistingLost.reduce((s, o) => s + o.amount, 0);
+    // For retention, we need to compare current year(s) to prior year
+    // If multiple years selected, use the earliest as base and latest as current
+    const currentYear = sortedYears[sortedYears.length - 1];
+    const priorYear = String(parseInt(currentYear) - 1);
     
-    // Previous period - existing customer revenue (this becomes the base)
-    const prevExistingWon = prevWon.filter(o => existingCustomerTypes.includes(o.type));
-    const prevExistingRevenue = prevExistingWon.reduce((s, o) => s + o.amount, 0);
+    // Get accounts that had revenue in the prior year (the base cohort)
+    const priorYearAccounts = {};
+    const currentYearAccounts = {};
     
-    // Get unique accounts for logo-based retention
-    const currentAccounts = new Set(currentExistingWon.map(o => o.account));
-    const lostAccounts = new Set(currentExistingLost.map(o => o.account));
-    const prevAccounts = new Set(prevExistingWon.map(o => o.account));
+    Object.entries(ACCOUNT_YEAR_REVENUE).forEach(([account, yearData]) => {
+      if (yearData[priorYear]) {
+        priorYearAccounts[account] = yearData[priorYear];
+      }
+      if (yearData[currentYear]) {
+        currentYearAccounts[account] = yearData[currentYear];
+      }
+    });
     
-    // Calculate NDR: (Starting Revenue + Expansion - Churn) / Starting Revenue
-    // Using previous period as starting revenue base
-    const baseRevenue = prevExistingRevenue || currentExistingRevenue * 0.9; // Fallback if no prev data
-    const expansionRevenue = currentExistingWon.filter(o => o.type === 'Expansion' || o.type === 'Upsell').reduce((s, o) => s + o.amount, 0);
-    const renewalRevenue = currentExistingWon.filter(o => o.type === 'Renewal').reduce((s, o) => s + o.amount, 0);
+    const priorAccountList = Object.keys(priorYearAccounts);
+    const currentAccountList = Object.keys(currentYearAccounts);
     
-    // NDR = (Renewals + Expansions) / Base Revenue
-    const ndrAmount = baseRevenue > 0 ? (renewalRevenue + expansionRevenue) / baseRevenue : 1;
+    if (priorAccountList.length === 0) {
+      return { 
+        ndrAmount: null, gdrAmount: null, ndrLogo: null, gdrLogo: null, 
+        hasData: false,
+        priorYear, currentYear,
+        baseRevenue: 0, currentRevenue: 0,
+        baseLogos: 0, retainedLogos: 0, newLogos: currentAccountList.length, churnedLogos: 0
+      };
+    }
     
-    // GDR = Renewals / Base Revenue (excludes expansion, only measures churn)
-    const gdrAmount = baseRevenue > 0 ? renewalRevenue / baseRevenue : 1;
+    // Calculate revenue retention
+    // Base revenue = total revenue from prior year accounts IN the prior year
+    const baseRevenue = priorAccountList.reduce((sum, acc) => sum + priorYearAccounts[acc], 0);
+    
+    // Retained revenue = revenue from prior year accounts IN the current year
+    const retainedRevenue = priorAccountList.reduce((sum, acc) => {
+      return sum + (currentYearAccounts[acc] || 0);
+    }, 0);
+    
+    // Expansion = accounts that spent MORE in current year than prior year
+    // Contraction = accounts that spent LESS (but > 0)
+    let expansionRevenue = 0;
+    let contractionRevenue = 0;
+    let retainedAccountsCount = 0;
+    
+    priorAccountList.forEach(acc => {
+      const priorRev = priorYearAccounts[acc];
+      const currentRev = currentYearAccounts[acc] || 0;
+      
+      if (currentRev > 0) {
+        retainedAccountsCount++;
+        if (currentRev > priorRev) {
+          expansionRevenue += (currentRev - priorRev);
+        } else if (currentRev < priorRev) {
+          contractionRevenue += (priorRev - currentRev);
+        }
+      }
+    });
+    
+    // Churned = prior year accounts with $0 in current year
+    const churnedAccounts = priorAccountList.filter(acc => !currentYearAccounts[acc]);
+    const churnedRevenue = churnedAccounts.reduce((sum, acc) => sum + priorYearAccounts[acc], 0);
+    
+    // New = current year accounts that weren't in prior year
+    const newAccounts = currentAccountList.filter(acc => !priorYearAccounts[acc]);
+    const newRevenue = newAccounts.reduce((sum, acc) => sum + currentYearAccounts[acc], 0);
+    
+    // NDR (Net Dollar Retention) = Retained Revenue / Base Revenue
+    // This shows: of the $ we had last year, how much do we have this year from same customers?
+    const ndrAmount = baseRevenue > 0 ? retainedRevenue / baseRevenue : null;
+    
+    // GDR (Gross Dollar Retention) = (Base Revenue - Churned Revenue) / Base Revenue
+    // This shows: what % of last year's revenue didn't churn? (ignores expansion/contraction)
+    const gdrAmount = baseRevenue > 0 ? (baseRevenue - churnedRevenue) / baseRevenue : null;
     
     // Logo-based retention
-    const baseLogoCount = prevAccounts.size || currentAccounts.size;
-    const retainedLogos = [...currentAccounts].filter(a => prevAccounts.has(a) || prevAccounts.size === 0).length;
-    const churnedLogos = lostAccounts.size;
-    const newLogos = won.filter(o => o.type === 'New Business').length;
+    const baseLogos = priorAccountList.length;
+    const retainedLogos = retainedAccountsCount;
+    const churnedLogos = churnedAccounts.length;
+    const newLogos = newAccounts.length;
     
-    const ndrLogo = baseLogoCount > 0 ? (retainedLogos + newLogos) / baseLogoCount : 1;
-    const gdrLogo = baseLogoCount > 0 ? retainedLogos / baseLogoCount : 1;
+    // Net Logo Retention = (Retained + New) / Base
+    const ndrLogo = baseLogos > 0 ? (retainedLogos + newLogos) / baseLogos : null;
+    
+    // Gross Logo Retention = Retained / Base
+    const gdrLogo = baseLogos > 0 ? retainedLogos / baseLogos : null;
     
     return {
-      ndrAmount: Math.min(ndrAmount, 2), // Cap at 200%
-      gdrAmount: Math.min(gdrAmount, 1.5),
+      ndrAmount,
+      gdrAmount,
       ndrLogo,
       gdrLogo,
-      expansionRevenue,
-      renewalRevenue,
-      churnRevenue: currentChurnRevenue,
+      hasData: true,
+      priorYear,
+      currentYear,
       baseRevenue,
+      retainedRevenue,
+      expansionRevenue,
+      contractionRevenue,
+      churnedRevenue,
+      newRevenue,
+      baseLogos,
       retainedLogos,
       churnedLogos,
       newLogos,
-      totalLogos: currentAccounts.size
+      totalCurrentLogos: currentAccountList.length
     };
-  }, [won, lost, prevWon]);
+  }, [activeYears]);
 
   const verticalAnalysis = useMemo(() => {
     const byV = {};
@@ -693,7 +770,23 @@ export default function RevIntelDashboard() {
     return activeYears.reduce((sum, year) => sum + (repData[year] || 0), 0) || repData['2026'] || repData['2025'] || 500000;
   };
 
-  const repPerformance = useMemo(() => { const r = {}; filtered.forEach(o => { if (!r[o.rep]) r[o.rep] = { won: 0, lost: 0, revenue: 0, pipeline: 0, territory: o.repTerritory || o.territory }; if (o.stage === 'Closed Won') { r[o.rep].won++; r[o.rep].revenue += o.amount; } if (o.stage === 'Closed Lost') r[o.rep].lost++; if (o.stage === 'Pipeline') r[o.rep].pipeline += o.amount; }); return Object.entries(r).map(([name, d]) => { const quota = getRepQuota(name); return { name, ...d, quota, winRate: (d.won + d.lost) > 0 ? d.won / (d.won + d.lost) : 0, attainment: d.revenue / quota }; }).sort((a, b) => b.revenue - a.revenue); }, [filtered, repQuotas, activeYears]);
+  const repPerformance = useMemo(() => { 
+    const r = {}; 
+    filtered.forEach(o => { 
+      // Only include known reps from the spreadsheet
+      const isKnownRep = KNOWN_REPS.some(kr => kr.toLowerCase() === o.rep?.toLowerCase());
+      if (!isKnownRep) return;
+      
+      if (!r[o.rep]) r[o.rep] = { won: 0, lost: 0, revenue: 0, pipeline: 0, territory: o.repTerritory || o.territory }; 
+      if (o.stage === 'Closed Won') { r[o.rep].won++; r[o.rep].revenue += o.amount; } 
+      if (o.stage === 'Closed Lost') r[o.rep].lost++; 
+      if (o.stage === 'Pipeline') r[o.rep].pipeline += o.amount; 
+    }); 
+    return Object.entries(r).map(([name, d]) => { 
+      const quota = getRepQuota(name); 
+      return { name, ...d, quota, winRate: (d.won + d.lost) > 0 ? d.won / (d.won + d.lost) : 0, attainment: d.revenue / quota }; 
+    }).sort((a, b) => b.revenue - a.revenue); 
+  }, [filtered, repQuotas, activeYears]);
 
   const territoryQuotaAtt = useMemo(() => { 
     const bt = {}; 
@@ -838,11 +931,12 @@ export default function RevIntelDashboard() {
 
   return (
     <div className="min-h-screen bg-black text-white">
-      <header className="border-b border-white/5 sticky top-0 z-40 backdrop-blur-md" style={{ background: 'rgba(0,0,0,0.2)' }}>
+      <header className={`border-b border-white/5 sticky top-0 z-40 backdrop-blur-md ${presentationMode ? 'hidden' : ''}`} style={{ background: 'rgba(0,0,0,0.2)' }}>
         <div className="max-w-[1400px] mx-auto px-6 py-3">
           <div className="flex items-center justify-between mb-3">
             <h1 className="text-[10px] font-medium tracking-[0.2em] uppercase text-neutral-500">Revenue Intelligence</h1>
             <div className="flex items-center gap-2">
+              <button onClick={() => setPresentationMode(true)} className="p-1.5 rounded-xl text-neutral-500 hover:text-white hover:bg-neutral-700 transition-all" title="Presentation Mode"><Maximize2 size={16} /></button>
               <button onClick={() => setShowAnnotations(true)} className="p-1.5 rounded-xl text-neutral-500 hover:text-white hover:bg-neutral-700 transition-all" title="Notes"><StickyNote size={16} /></button>
               <button onClick={handleExport} className="p-1.5 rounded-xl text-neutral-500 hover:text-white hover:bg-neutral-700 transition-all" title="Export"><Download size={16} /></button>
             </div>
@@ -864,6 +958,112 @@ export default function RevIntelDashboard() {
           </div>
         </div>
       </header>
+
+      {/* Presentation Mode */}
+      {presentationMode && (
+        <div className="fixed inset-0 bg-black z-50 overflow-auto">
+          <button 
+            onClick={() => setPresentationMode(false)} 
+            className="fixed top-6 right-6 p-3 rounded-xl bg-neutral-800 text-white hover:bg-neutral-700 transition-all z-50"
+            title="Exit Presentation Mode"
+          >
+            <Minimize2 size={20} />
+          </button>
+          
+          <div className="min-h-screen p-12">
+            {/* Title */}
+            <div className="text-center mb-12">
+              <h1 className="text-sm font-medium tracking-[0.3em] uppercase text-neutral-500 mb-4">Revenue Intelligence</h1>
+              <p className="text-neutral-600 text-lg">{activeYears.join(', ')} {timePeriods.length > 0 ? `• ${timePeriods.join(', ')}` : ''}</p>
+            </div>
+            
+            {/* Key Metrics - Large */}
+            <div className="max-w-6xl mx-auto mb-16">
+              <div className="grid grid-cols-4 gap-8">
+                <div className="text-center p-8 bg-neutral-900 rounded-2xl border border-neutral-800">
+                  <p className="text-neutral-500 text-sm uppercase tracking-wider mb-3">Revenue</p>
+                  <p className="text-5xl font-bold text-white mb-2">{fmt(totalRevenue)}</p>
+                  {prevRevenue > 0 && <p className={`text-lg ${totalRevenue >= prevRevenue ? 'text-green-400' : 'text-red-400'}`}>{totalRevenue >= prevRevenue ? '↑' : '↓'} {pct(Math.abs((totalRevenue - prevRevenue) / prevRevenue))} YoY</p>}
+                </div>
+                <div className="text-center p-8 bg-neutral-900 rounded-2xl border border-neutral-800">
+                  <p className="text-neutral-500 text-sm uppercase tracking-wider mb-3">Win Rate</p>
+                  <p className={`text-5xl font-bold ${winRate >= goalWinRate ? 'text-green-400' : winRate >= goalWinRate * 0.8 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(winRate)}</p>
+                  <p className="text-lg text-neutral-500">Goal: {pct(goalWinRate)}</p>
+                </div>
+                <div className="text-center p-8 bg-neutral-900 rounded-2xl border border-neutral-800">
+                  <p className="text-neutral-500 text-sm uppercase tracking-wider mb-3">Avg Deal Size</p>
+                  <p className={`text-5xl font-bold ${avgDealSize >= effectiveGoalDealSize ? 'text-green-400' : 'text-white'}`}>{fmt(avgDealSize)}</p>
+                  <p className="text-lg text-neutral-500">Goal: {fmt(effectiveGoalDealSize)}</p>
+                </div>
+                <div className="text-center p-8 bg-neutral-900 rounded-2xl border border-neutral-800">
+                  <p className="text-neutral-500 text-sm uppercase tracking-wider mb-3">Pipeline</p>
+                  <p className="text-5xl font-bold text-white">{fmt(pipelineValue)}</p>
+                  <p className="text-lg text-neutral-500">{pipeline.length} deals</p>
+                </div>
+              </div>
+            </div>
+            
+            {/* Forecast Attainment - Hero */}
+            <div className="max-w-4xl mx-auto mb-16 text-center">
+              <p className="text-neutral-500 text-sm uppercase tracking-wider mb-4">Forecast Attainment</p>
+              <p className="text-8xl font-bold mb-4" style={{ color: forecastColor }}>{pct(forecastAttainment)}</p>
+              <div className="flex justify-center gap-12 text-xl">
+                <span className="text-neutral-400">Closed: <span className="text-white font-semibold">{fmt(totalRevenue)}</span></span>
+                <span className="text-neutral-400">Pipeline: <span className="text-white font-semibold">{fmt(pipelineValue)}</span></span>
+                <span className="text-neutral-400">Goal: <span className="text-white font-semibold">{fmt(effectiveGoalRevenue)}</span></span>
+              </div>
+            </div>
+            
+            {/* Territory Performance */}
+            <div className="max-w-4xl mx-auto mb-16">
+              <h2 className="text-sm font-medium tracking-[0.2em] uppercase text-neutral-500 mb-6 text-center">Territory Performance</h2>
+              <div className="grid grid-cols-2 gap-6">
+                {territoryData.map(t => (
+                  <div key={t.name} className="p-6 bg-neutral-900 rounded-2xl border border-neutral-800">
+                    <div className="flex justify-between items-center mb-4">
+                      <span className="text-2xl font-semibold text-white">{t.name}</span>
+                      {t.change !== null && <span className={`text-xl ${t.change >= 0 ? 'text-green-400' : 'text-red-400'}`}>{t.change >= 0 ? '+' : ''}{(t.change * 100).toFixed(0)}% YoY</span>}
+                    </div>
+                    <p className="text-4xl font-bold text-white mb-2">{fmt(t.revenue)}</p>
+                    <p className="text-neutral-500">Win Rate: <span className={t.winRate >= winRate ? 'text-green-400' : 'text-red-400'}>{pct(t.winRate)}</span></p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            
+            {/* Top Loss Reasons */}
+            <div className="max-w-4xl mx-auto mb-16">
+              <h2 className="text-sm font-medium tracking-[0.2em] uppercase text-neutral-500 mb-6 text-center">Top Loss Reasons</h2>
+              <div className="space-y-4">
+                {lossReasons.slice(0, 4).map((r, i) => (
+                  <div key={r.name} className="flex items-center gap-4 p-4 bg-neutral-900 rounded-xl border border-neutral-800">
+                    <span className={`w-10 h-10 rounded-xl flex items-center justify-center text-lg font-bold ${i === 0 ? 'bg-red-500/20 text-red-400' : 'bg-neutral-800 text-neutral-500'}`}>{i + 1}</span>
+                    <span className="flex-1 text-lg text-white">{r.name}</span>
+                    <span className="text-xl font-semibold text-red-400">{fmt(r.value)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            
+            {/* AI Insights */}
+            {aiSummary.insights.length > 0 && (
+              <div className="max-w-4xl mx-auto">
+                <h2 className="text-sm font-medium tracking-[0.2em] uppercase text-neutral-500 mb-6 text-center">Key Insights</h2>
+                <div className="p-8 bg-neutral-900 rounded-2xl border border-neutral-800">
+                  <ul className="space-y-4">
+                    {aiSummary.insights.map((insight, i) => (
+                      <li key={i} className="flex items-start gap-4 text-xl text-neutral-300">
+                        <Sparkles size={24} className="text-yellow-500 flex-shrink-0 mt-1" />
+                        <span>{insight}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <main className="max-w-[1400px] mx-auto px-6 py-8">
         <section className="mb-8">
@@ -916,81 +1116,90 @@ export default function RevIntelDashboard() {
 
         <section className="mb-4">
           <button onClick={() => setShowRetention(!showRetention)} className="w-full flex items-center justify-between p-4 bg-neutral-800 border border-neutral-700 rounded-xl hover:bg-neutral-700 transition-all">
-            <div className="flex items-center gap-3"><TrendingUp size={16} className="text-neutral-400" /><span className="text-sm font-semibold">Retention Metrics</span><span className="text-xs text-neutral-500">NDR {pct(retentionMetrics.ndrAmount)}</span></div>
+            <div className="flex items-center gap-3"><TrendingUp size={16} className="text-neutral-400" /><span className="text-sm font-semibold">Retention Metrics</span><span className="text-xs text-neutral-500">{retentionMetrics.hasData ? `NDR ${pct(retentionMetrics.ndrAmount)} (${retentionMetrics.priorYear}→${retentionMetrics.currentYear})` : 'Select a year to view'}</span></div>
             {showRetention ? <ChevronUp size={16} className="text-neutral-500" /> : <ChevronDown size={16} className="text-neutral-500" />}
           </button>
           {showRetention && (
             <div className="mt-3 bg-neutral-800 border border-neutral-700 rounded-xl p-5">
-              <div className="grid grid-cols-2 gap-6">
-                <div>
-                  <h3 className="text-xs text-neutral-500 uppercase mb-4">By Revenue</h3>
-                  <div className="space-y-4">
-                    <div className="p-4 bg-neutral-700/30 rounded-xl">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-neutral-400">Net Dollar Retention</span>
-                        <span className={`text-lg font-semibold ${retentionMetrics.ndrAmount >= goalNDR ? 'text-green-400' : retentionMetrics.ndrAmount >= 1 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(retentionMetrics.ndrAmount)}</span>
-                      </div>
-                      <div className="h-2 bg-neutral-700 rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${retentionMetrics.ndrAmount >= goalNDR ? 'bg-green-500' : retentionMetrics.ndrAmount >= 1 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(retentionMetrics.ndrAmount * 100, 150)}%` }} />
-                      </div>
-                      <div className="flex justify-between mt-1 text-[10px] text-neutral-500">
-                        <span>Goal: {pct(goalNDR)}</span>
-                        <span>Expansion: {fmt(retentionMetrics.expansionRevenue)}</span>
+              {!retentionMetrics.hasData ? (
+                <p className="text-sm text-neutral-500 text-center py-4">Select a year to view retention metrics (compares to prior year)</p>
+              ) : (
+                <>
+                  <div className="mb-4 p-3 bg-neutral-700/30 rounded-xl text-xs text-neutral-400">
+                    Comparing {retentionMetrics.baseLogos} accounts ({fmt(retentionMetrics.baseRevenue)}) from {retentionMetrics.priorYear} to {retentionMetrics.currentYear}
+                  </div>
+                  <div className="grid grid-cols-2 gap-6">
+                    <div>
+                      <h3 className="text-xs text-neutral-500 uppercase mb-4">By Revenue</h3>
+                      <div className="space-y-4">
+                        <div className="p-4 bg-neutral-700/30 rounded-xl">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm text-neutral-400">Net Dollar Retention</span>
+                            <span className={`text-lg font-semibold ${retentionMetrics.ndrAmount >= goalNDR ? 'text-green-400' : retentionMetrics.ndrAmount >= 1 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(retentionMetrics.ndrAmount)}</span>
+                          </div>
+                          <div className="h-2 bg-neutral-700 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${retentionMetrics.ndrAmount >= goalNDR ? 'bg-green-500' : retentionMetrics.ndrAmount >= 1 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min((retentionMetrics.ndrAmount || 0) * 50, 100)}%` }} />
+                          </div>
+                          <div className="flex justify-between mt-1 text-[10px] text-neutral-500">
+                            <span>Base: {fmt(retentionMetrics.baseRevenue)}</span>
+                            <span>Retained: {fmt(retentionMetrics.retainedRevenue)}</span>
+                          </div>
+                        </div>
+                        <div className="p-4 bg-neutral-700/30 rounded-xl">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm text-neutral-400">Gross Dollar Retention</span>
+                            <span className={`text-lg font-semibold ${retentionMetrics.gdrAmount >= goalGDR ? 'text-green-400' : retentionMetrics.gdrAmount >= 0.85 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(retentionMetrics.gdrAmount)}</span>
+                          </div>
+                          <div className="h-2 bg-neutral-700 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${retentionMetrics.gdrAmount >= goalGDR ? 'bg-green-500' : retentionMetrics.gdrAmount >= 0.85 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min((retentionMetrics.gdrAmount || 0) * 100, 100)}%` }} />
+                          </div>
+                          <div className="flex justify-between mt-1 text-[10px] text-neutral-500">
+                            <span>Goal: {pct(goalGDR)}</span>
+                            <span>Churned: {fmt(retentionMetrics.churnedRevenue)}</span>
+                          </div>
+                        </div>
                       </div>
                     </div>
-                    <div className="p-4 bg-neutral-700/30 rounded-xl">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-neutral-400">Gross Dollar Retention</span>
-                        <span className={`text-lg font-semibold ${retentionMetrics.gdrAmount >= goalGDR ? 'text-green-400' : retentionMetrics.gdrAmount >= 0.85 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(retentionMetrics.gdrAmount)}</span>
-                      </div>
-                      <div className="h-2 bg-neutral-700 rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${retentionMetrics.gdrAmount >= goalGDR ? 'bg-green-500' : retentionMetrics.gdrAmount >= 0.85 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(retentionMetrics.gdrAmount * 100, 100)}%` }} />
-                      </div>
-                      <div className="flex justify-between mt-1 text-[10px] text-neutral-500">
-                        <span>Goal: {pct(goalGDR)}</span>
-                        <span>Churn: {fmt(retentionMetrics.churnRevenue)}</span>
+                    <div>
+                      <h3 className="text-xs text-neutral-500 uppercase mb-4">By Logo Count</h3>
+                      <div className="space-y-4">
+                        <div className="p-4 bg-neutral-700/30 rounded-xl">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm text-neutral-400">Net Logo Retention</span>
+                            <span className={`text-lg font-semibold ${retentionMetrics.ndrLogo >= 1 ? 'text-green-400' : retentionMetrics.ndrLogo >= 0.9 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(retentionMetrics.ndrLogo)}</span>
+                          </div>
+                          <div className="h-2 bg-neutral-700 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${retentionMetrics.ndrLogo >= 1 ? 'bg-green-500' : retentionMetrics.ndrLogo >= 0.9 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min((retentionMetrics.ndrLogo || 0) * 50, 100)}%` }} />
+                          </div>
+                          <div className="flex justify-between mt-1 text-[10px] text-neutral-500">
+                            <span>Retained: {retentionMetrics.retainedLogos} + New: {retentionMetrics.newLogos}</span>
+                            <span>Base: {retentionMetrics.baseLogos}</span>
+                          </div>
+                        </div>
+                        <div className="p-4 bg-neutral-700/30 rounded-xl">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="text-sm text-neutral-400">Gross Logo Retention</span>
+                            <span className={`text-lg font-semibold ${retentionMetrics.gdrLogo >= 0.9 ? 'text-green-400' : retentionMetrics.gdrLogo >= 0.8 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(retentionMetrics.gdrLogo)}</span>
+                          </div>
+                          <div className="h-2 bg-neutral-700 rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${retentionMetrics.gdrLogo >= 0.9 ? 'bg-green-500' : retentionMetrics.gdrLogo >= 0.8 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min((retentionMetrics.gdrLogo || 0) * 100, 100)}%` }} />
+                          </div>
+                          <div className="flex justify-between mt-1 text-[10px] text-neutral-500">
+                            <span>Retained: {retentionMetrics.retainedLogos}</span>
+                            <span>Churned: {retentionMetrics.churnedLogos}</span>
+                          </div>
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-                <div>
-                  <h3 className="text-xs text-neutral-500 uppercase mb-4">By Logo Count</h3>
-                  <div className="space-y-4">
-                    <div className="p-4 bg-neutral-700/30 rounded-xl">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-neutral-400">Net Logo Retention</span>
-                        <span className={`text-lg font-semibold ${retentionMetrics.ndrLogo >= 1 ? 'text-green-400' : retentionMetrics.ndrLogo >= 0.9 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(retentionMetrics.ndrLogo)}</span>
-                      </div>
-                      <div className="h-2 bg-neutral-700 rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${retentionMetrics.ndrLogo >= 1 ? 'bg-green-500' : retentionMetrics.ndrLogo >= 0.9 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(retentionMetrics.ndrLogo * 100, 150)}%` }} />
-                      </div>
-                      <div className="flex justify-between mt-1 text-[10px] text-neutral-500">
-                        <span>New: {retentionMetrics.newLogos} logos</span>
-                        <span>Total: {retentionMetrics.totalLogos} logos</span>
-                      </div>
-                    </div>
-                    <div className="p-4 bg-neutral-700/30 rounded-xl">
-                      <div className="flex items-center justify-between mb-2">
-                        <span className="text-sm text-neutral-400">Gross Logo Retention</span>
-                        <span className={`text-lg font-semibold ${retentionMetrics.gdrLogo >= 0.9 ? 'text-green-400' : retentionMetrics.gdrLogo >= 0.8 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(retentionMetrics.gdrLogo)}</span>
-                      </div>
-                      <div className="h-2 bg-neutral-700 rounded-full overflow-hidden">
-                        <div className={`h-full rounded-full ${retentionMetrics.gdrLogo >= 0.9 ? 'bg-green-500' : retentionMetrics.gdrLogo >= 0.8 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(retentionMetrics.gdrLogo * 100, 100)}%` }} />
-                      </div>
-                      <div className="flex justify-between mt-1 text-[10px] text-neutral-500">
-                        <span>Retained: {retentionMetrics.retainedLogos}</span>
-                        <span>Churned: {retentionMetrics.churnedLogos}</span>
-                      </div>
-                    </div>
+                  <div className="mt-4 pt-4 border-t border-neutral-700 flex items-center gap-4 text-[10px] text-neutral-500">
+                    <Settings size={10} />
+                    <span>Goals:</span>
+                    <span>NDR <EditableValue value={goalNDR} onChange={setGoalNDR} format="percent" size="xs" /></span>
+                    <span>GDR <EditableValue value={goalGDR} onChange={setGoalGDR} format="percent" size="xs" /></span>
                   </div>
-                </div>
-              </div>
-              <div className="mt-4 pt-4 border-t border-neutral-700 flex items-center gap-4 text-[10px] text-neutral-500">
-                <Settings size={10} />
-                <span>Goals:</span>
-                <span>NDR <EditableValue value={goalNDR} onChange={setGoalNDR} format="percent" size="xs" /></span>
-                <span>GDR <EditableValue value={goalGDR} onChange={setGoalGDR} format="percent" size="xs" /></span>
-              </div>
+                </>
+              )}
             </div>
           )}
         </section>
