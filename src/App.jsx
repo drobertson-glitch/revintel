@@ -749,10 +749,37 @@ export default function RevIntelDashboard() {
     };
   }, [activeYears]);
 
+  // Verticals to exclude from analysis
+  const EXCLUDED_VERTICALS = [
+    'Telco/Media + Entertainment',
+    'Transportation/Logistics', 
+    'Finance/Insurance/Real Estate',
+    'Government/Non-Profit/Education',
+    'E-Commerce',
+    'CPG/Beauty',
+    'Retail/Electronics/Tech',
+    'Other',
+    'Insurance',
+    'Real Estate',
+    'Media'
+  ];
+
   const verticalAnalysis = useMemo(() => {
     const byV = {};
-    filtered.forEach(o => { if (!o.vertical) return; if (!byV[o.vertical]) byV[o.vertical] = { won: 0, lost: 0, revenue: 0, pipeline: 0, lossReasons: {} }; if (o.stage === 'Closed Won') { byV[o.vertical].won++; byV[o.vertical].revenue += o.amount; } if (o.stage === 'Closed Lost') { byV[o.vertical].lost++; if (o.lossReason) byV[o.vertical].lossReasons[o.lossReason] = (byV[o.vertical].lossReasons[o.lossReason] || 0) + 1; } if (o.stage === 'Pipeline') byV[o.vertical].pipeline += o.amount; });
-    const prevByV = {}; prevYearData.forEach(o => { if (!o.vertical) return; if (!prevByV[o.vertical]) prevByV[o.vertical] = { revenue: 0 }; if (o.stage === 'Closed Won') prevByV[o.vertical].revenue += o.amount; });
+    filtered.forEach(o => { 
+      if (!o.vertical) return; 
+      if (EXCLUDED_VERTICALS.includes(o.vertical)) return; // Skip excluded verticals
+      if (!byV[o.vertical]) byV[o.vertical] = { won: 0, lost: 0, revenue: 0, pipeline: 0, lossReasons: {} }; 
+      if (o.stage === 'Closed Won') { byV[o.vertical].won++; byV[o.vertical].revenue += o.amount; } 
+      if (o.stage === 'Closed Lost') { byV[o.vertical].lost++; if (o.lossReason) byV[o.vertical].lossReasons[o.lossReason] = (byV[o.vertical].lossReasons[o.lossReason] || 0) + 1; } 
+      if (o.stage === 'Pipeline') byV[o.vertical].pipeline += o.amount; 
+    });
+    const prevByV = {}; prevYearData.forEach(o => { 
+      if (!o.vertical) return; 
+      if (EXCLUDED_VERTICALS.includes(o.vertical)) return;
+      if (!prevByV[o.vertical]) prevByV[o.vertical] = { revenue: 0 }; 
+      if (o.stage === 'Closed Won') prevByV[o.vertical].revenue += o.amount; 
+    });
     return Object.entries(byV).map(([name, d]) => { const tl = Object.entries(d.lossReasons).sort((a, b) => b[1] - a[1])[0]; const pr = prevByV[name]?.revenue || 0; return { name, ...d, winRate: (d.won + d.lost) > 0 ? d.won / (d.won + d.lost) : 0, topLossReason: tl ? tl[0] : null, change: pr > 0 ? (d.revenue - pr) / pr : null, color: verticalColors[name] || '#737373' }; }).sort((a, b) => b.revenue - a.revenue);
   }, [filtered, prevYearData]);
 
