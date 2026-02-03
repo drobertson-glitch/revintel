@@ -994,8 +994,8 @@ export default function RevIntelDashboard() {
               <FilterDropdown label="Territory" values={territories} options={uniqueTerritories.length > 0 ? uniqueTerritories : TERRITORIES} onChange={setTerritories} icon={MapPin} />
               <FilterDropdown label="Source" values={sources} options={uniqueSources.length > 0 ? uniqueSources : LEAD_SOURCES} onChange={setSources} icon={Zap} />
               <FilterDropdown label="Type" values={types} options={uniqueTypes.length > 0 ? uniqueTypes : OPPORTUNITY_TYPES} onChange={setTypes} icon={Layers} />
-              <FilterDropdown label="Vertical" values={verticals} options={uniqueVerticals.length > 0 ? uniqueVerticals : VERTICALS} onChange={setVerticals} icon={Briefcase} />
-              <FilterDropdown label="Customer" values={customerRelationships} options={uniqueCustomerRelationships.length > 0 ? uniqueCustomerRelationships : ['Brand Direct', 'Agency']} onChange={setCustomerRelationships} icon={Users} />
+              <FilterDropdown label="Vertical" values={verticals} options={(uniqueVerticals.length > 0 ? uniqueVerticals : VERTICALS).filter(v => !EXCLUDED_VERTICALS.includes(v))} onChange={setVerticals} icon={Briefcase} />
+              <FilterDropdown label="Customer" values={customerRelationships} options={(uniqueCustomerRelationships.length > 0 ? uniqueCustomerRelationships : ['Brand Direct', 'Agency']).filter(c => c !== 'Unknown')} onChange={setCustomerRelationships} icon={Users} />
               {hasFilters && <button onClick={() => { setTerritories([]); setSources([]); setTypes([]); setVerticals([]); setCustomerRelationships([]); }} className="text-xs text-neutral-500 hover:text-white px-2 py-1 rounded-lg hover:bg-neutral-800 transition-all">Clear</button>}
             </div>
             <div className="flex items-center gap-2">
