@@ -54,6 +54,14 @@ const REP_QUOTAS = {
   'Cas Harding - Whatman': { '2025': 4800000, '2026': 5500000 },
   'Cas Harding': { '2025': 4800000, '2026': 5500000 },
 };
+// Territory quotas by year
+const TERRITORY_QUOTAS_BY_YEAR = {
+  '2026': { 'US': 52000000, 'Canada': 13000000 },
+  '2025': { 'US': 44000000, 'Canada': 11000000 },
+  '2024': { 'US': 30000000, 'Canada': 8000000 },
+  '2023': { 'US': 28000000, 'Canada': 7725000 },
+  '2022': { 'US': 13000000, 'Canada': 3662000 },
+};
 const GOAL_DEAL_SIZE = 120000;
 const verticalColors = { 'Technology': '#3b82f6', 'Financial Services': '#22c55e', 'Healthcare': '#ef4444', 'Manufacturing': '#f59e0b', 'Retail': '#8b5cf6', 'Media': '#ec4899', 'CPG/Beauty': '#14b8a6', 'Food/Bev': '#f97316', 'Pharma': '#6366f1', 'Automotive': '#84cc16', 'Entertainment': '#a855f7', 'E-Commerce': '#0ea5e9', 'Other': '#737373' };
 
@@ -570,8 +578,21 @@ export default function RevIntelDashboard() {
   const updateRepQuota = (name, val) => setRepQuotas(prev => ({ ...prev, [name]: val }));
   
   // Territory quotas
-  const [territoryQuotas, setTerritoryQuotas] = useState({ 'US': 120000000, 'Canada': 40000000 });
-  const updateTerritoryQuota = (territory, val) => setTerritoryQuotas(prev => ({ ...prev, [territory]: val }));
+  // Calculate territory quotas based on selected years
+  const territoryQuotas = useMemo(() => {
+    const quotas = { 'US': 0, 'Canada': 0 };
+    activeYears.forEach(year => {
+      const yearQuotas = TERRITORY_QUOTAS_BY_YEAR[year] || {};
+      quotas['US'] += yearQuotas['US'] || 0;
+      quotas['Canada'] += yearQuotas['Canada'] || 0;
+    });
+    // Default to 2026 if no years selected or no quotas found
+    if (quotas['US'] === 0 && quotas['Canada'] === 0) {
+      return { 'US': 52000000, 'Canada': 13000000 };
+    }
+    return quotas;
+  }, [activeYears]);
+  // Territory quotas are now calculated automatically based on selected years
 
   useEffect(() => { const t = setTimeout(() => setIsLoading(false), 500); return () => clearTimeout(t); }, []);
   useEffect(() => { const h = e => { const m = ['winRate', 'dealSize', 'cycle', 'pipeline']; const i = m.indexOf(focusedMetric); if (e.key === 'ArrowRight' && i < m.length - 1) setFocusedMetric(m[i + 1]); else if (e.key === 'ArrowLeft' && i > 0) setFocusedMetric(m[i - 1]); else if (e.key === 'Escape') setFocusedMetric(null); }; window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h); }, [focusedMetric]);
@@ -1213,7 +1234,7 @@ export default function RevIntelDashboard() {
 
         <section className="bg-neutral-800 border border-neutral-700 rounded-xl p-5">
           <h2 className="text-sm font-semibold mb-4">Rep Performance</h2>
-          <div className="mb-6 p-4 bg-neutral-700/30 rounded-xl"><h3 className="text-xs text-neutral-500 uppercase mb-3 flex items-center gap-2"><Globe size={12} /> Territory Quota Attainment</h3>{territoryQuotaAtt.length === 0 ? <p className="text-sm text-neutral-500">No data</p> : (<div className="space-y-4">{territoryQuotaAtt.map(t => (<div key={t.territory} className="p-3 bg-neutral-800/50 rounded-xl"><div className="flex items-center justify-between mb-2"><div className="flex items-center gap-2"><span className="text-sm font-semibold">{t.territory}</span><span className="text-xs text-neutral-500">({t.repCount} reps)</span></div><span className={`text-lg font-bold ${t.attainment >= 1 ? 'text-green-400' : t.attainment >= 0.7 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(t.attainment)}</span></div><div className="h-2 bg-neutral-700 rounded-full overflow-hidden mb-2"><div className={`h-full rounded-full ${t.attainment >= 1 ? 'bg-green-500' : t.attainment >= 0.7 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(t.attainment * 100, 100)}%` }} /></div><div className="flex items-center justify-between text-xs"><span className="text-neutral-400">{fmt(t.totalRevenue)} closed</span><div className="flex items-center gap-1"><span className="text-neutral-500">Quota:</span><EditableValue value={t.totalQuota} onChange={(v) => updateTerritoryQuota(t.territory, v)} format="currency" size="xs" /></div></div></div>))}</div>)}</div>
+          <div className="mb-6 p-4 bg-neutral-700/30 rounded-xl"><h3 className="text-xs text-neutral-500 uppercase mb-3 flex items-center gap-2"><Globe size={12} /> Territory Quota Attainment</h3>{territoryQuotaAtt.length === 0 ? <p className="text-sm text-neutral-500">No data</p> : (<div className="space-y-4">{territoryQuotaAtt.map(t => (<div key={t.territory} className="p-3 bg-neutral-800/50 rounded-xl"><div className="flex items-center justify-between mb-2"><div className="flex items-center gap-2"><span className="text-sm font-semibold">{t.territory}</span><span className="text-xs text-neutral-500">({t.repCount} reps)</span></div><span className={`text-lg font-bold ${t.attainment >= 1 ? 'text-green-400' : t.attainment >= 0.7 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(t.attainment)}</span></div><div className="h-2 bg-neutral-700 rounded-full overflow-hidden mb-2"><div className={`h-full rounded-full ${t.attainment >= 1 ? 'bg-green-500' : t.attainment >= 0.7 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(t.attainment * 100, 100)}%` }} /></div><div className="flex items-center justify-between text-xs"><span className="text-neutral-400">{fmt(t.totalRevenue)} closed</span><span className="text-neutral-500">Quota: {fmt(t.totalQuota)}</span></div></div>))}</div>)}</div>
           {repPerformance.length === 0 ? <EmptyState icon={Users} title="No reps" /> : (<div className="grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-8 gap-3 max-h-96 overflow-auto">{repPerformance.map((r, i) => (<div key={r.name} onClick={() => setModal({ open: true, title: r.name, subtitle: `${r.territory} • ${r.won}W/${r.lost}L`, data: filtered.filter(o => o.rep === r.name) })} className="text-center p-3 rounded-xl bg-neutral-700/30 border border-neutral-700 hover:bg-neutral-700 cursor-pointer transition-all"><div className={`w-10 h-10 rounded-full mx-auto mb-2 flex items-center justify-center text-xs font-bold ${r.attainment >= 1 ? 'bg-green-500 text-black' : r.attainment >= 0.7 ? 'bg-yellow-500 text-black' : r.attainment >= 0.5 ? 'bg-neutral-600 text-white' : 'bg-red-500/20 text-red-400 ring-1 ring-red-500/30'}`}>{r.name.split(' ').map(n => n[0]).join('')}</div><p className="text-xs font-medium truncate">{r.name.split(' ')[0]}</p><p className="text-[10px] text-neutral-500">{r.territory}</p><p className="text-sm font-semibold mt-1">{fmt(r.revenue)}</p><div className="mt-1.5 h-1 bg-neutral-700 rounded-full overflow-hidden"><div className={`h-full rounded-full ${r.attainment >= 1 ? 'bg-green-500' : r.attainment >= 0.7 ? 'bg-yellow-500' : 'bg-red-500'}`} style={{ width: `${Math.min(r.attainment * 100, 100)}%` }} /></div><div className="flex items-center justify-center gap-1 mt-1"><span className={`text-[10px] ${r.attainment >= 1 ? 'text-green-400' : r.attainment >= 0.7 ? 'text-yellow-400' : 'text-red-400'}`}>{pct(r.attainment)}</span><span className="text-[10px] text-neutral-600">/</span><EditableValue value={r.quota} onChange={v => updateRepQuota(r.name, v)} format="currency" size="xs" /></div></div>))}</div>)}
         </section>
       </main>
